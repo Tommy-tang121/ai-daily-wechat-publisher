@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Daily</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Noto+Serif+SC:wght@300;400;500;600&family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- ===== CONTROLS PANEL ===== -->
+    <aside class="controls" id="controls">
+      <div class="logo"><span class="red">AI</span> Daily</div>
+      <div class="logo-sub">—— 草稿本上的 AI 日报 ——</div>
+
+      <div class="ctrl-section">
+        <div class="ctrl-section-title">📅 日期</div>
+        <div class="cal-card">
+          <div class="cal-head">
+            <button class="cal-nav" id="calPrev">◀</button>
+            <span id="calMonth">六月 2026</span>
+            <button class="cal-nav" id="calNext">▶</button>
+          </div>
+          <div class="cal-grid" id="calGrid"></div>
+          <div class="cal-foot">今天: <span id="calToday"></span></div>
+        </div>
+      </div>
+
+      <div class="fetch-row">
+        <span class="fetch-date" id="fetchDate">--</span>
+        <span class="badge-outline" id="fetchWeekday">周二</span>
+      </div>
+      <div class="hint" id="fetchHint">选择日期后点击抓取</div>
+      <button class="btn-fetch" id="btnFetch">
+        <span class="spin-icon">⟳</span> 抓取
+      </button>
+
+      <!-- Timeline progress -->
+      <div class="timeline" id="progCard">
+        <div class="tl-step" data-step="scraping">
+          <div class="tl-dot"></div>
+          <div class="tl-line"></div>
+          <div class="tl-content">
+            <span class="tl-label">抓取</span>
+            <span class="tl-status" id="tlScraping">等待中</span>
+          </div>
+        </div>
+        <div class="tl-step" data-step="rewriting">
+          <div class="tl-dot"></div>
+          <div class="tl-line"></div>
+          <div class="tl-content">
+            <span class="tl-label">重写</span>
+            <span class="tl-status" id="tlRewriting">等待中</span>
+          </div>
+        </div>
+        <div class="tl-step" data-step="formatting">
+          <div class="tl-dot"></div>
+          <div class="tl-line"></div>
+          <div class="tl-content">
+            <span class="tl-label">排版</span>
+            <span class="tl-status" id="tlFormatting">等待中</span>
+          </div>
+        </div>
+        <div class="tl-step" data-step="cover">
+          <div class="tl-dot"></div>
+          <div class="tl-line"></div>
+          <div class="tl-content">
+            <span class="tl-label">封面</span>
+            <span class="tl-status" id="tlCover">等待中</span>
+          </div>
+        </div>
+        <div class="tl-step" data-step="done">
+          <div class="tl-dot"></div>
+          <div class="tl-content">
+            <span class="tl-label">完成</span>
+            <span class="tl-status" id="tlDone">等待中</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="status-card" id="errCard" style="display:none;">
+        <div class="status-pill pill-error">FAILED</div>
+        <div class="bar-row">
+          <div class="bar-track"><div class="bar-fill error" id="errFill" style="width:100%"></div></div>
+          <span class="bar-pct" id="errPct">100%</span>
+        </div>
+        <div class="status-msg" id="errText">发生错误</div>
+      </div>
+
+      <div class="ctrl-section">
+        <div class="ctrl-section-title">📏 字数限制</div>
+        <div class="config-row">
+          <input type="number" id="inputMaxWords" class="word-input" value="200" min="50" max="500">
+          <span class="word-unit">字/条</span>
+        </div>
+        <div class="config-hint">范围 50-500，保存即时生效</div>
+      </div>
+    </aside>
+
+    <!-- ===== MAIN MOCKUP ===== -->
+    <main class="mockup" id="mockup">
+      <div class="coffee-stain coffee-stain-1"></div>
+      <div class="coffee-stain coffee-stain-2"></div>
+
+      <div class="corner-tag" id="cornerTag">
+        <span class="spray-badge" id="cornerBadge">IDLE</span>
+      </div>
+
+      <div class="mockup-body">
+        <!-- MAIN HEADER (slogan) -->
+        <div class="main-header"><span class="hl-deco">✦</span> <span class="hl-cn">每日一杯</span><span class="hl-mid"> · </span><span class="hl-cn">读懂</span> <span class="hl-ai">AI</span><span class="hl-cn"> 行业</span> <span class="hl-deco">✦</span></div>
+
+        <!-- TITLE + AUTHOR FIELDS -->
+        <div class="main-fields">
+          <div class="field-row">
+            <span class="field-label">标题：</span>
+            <input type="text" class="field-input" id="inputTitle" value="AI 行业热点新闻">
+          </div>
+          <div class="field-row">
+            <span class="field-label">作者：</span>
+            <input type="text" class="field-input" id="inputAuthor" value="Tommy">
+          </div>
+        </div>
+
+        <!-- PREVIEW BUTTONS -->
+        <div class="pv-buttons">
+          <button class="pv-btn active" data-view="preview">正文预览</button>
+          <button class="pv-btn" data-view="cover">封面预览</button>
+        </div>
+
+        <!-- VIEW BODY -->
+        <div class="pv-body">
+          <div class="pv-content" id="pvContent">
+            <div style="text-align:center;padding:60px 0;color:var(--ink-faint);font-style:italic;">请先选择日期并点击「抓取」</div>
+          </div>
+          <div class="pv-cover" id="pvCover" style="display:none;">
+            <img id="coverPreviewImg" src="" class="cover-img" style="max-width:100%;">
+          </div>
+        </div>
+
+        <!-- STATUS AREA -->
+        <div class="status-area" id="statusArea">
+          <div class="status-info" id="statusInfo">
+            <span class="status-bar" id="statusBar">IDLE</span>
+            <span id="statusText">等待操作</span>
+            <br>
+            <small id="statusDetail">选择日期后点击「抓取」开始</small>
+          </div>
+          <div class="actions">
+            <div class="sched-mini">
+              <span class="sched-label">⏰</span>
+              <input type="time" id="scheduleTime" class="time-input" value="12:00">
+              <button class="btn" id="btnSaveTime" style="font-size:14px;padding:4px 12px;">保存</button>
+            </div>
+            <button class="btn" id="btnCopy">📋 复制</button>
+            <button class="btn btn-primary" id="btnPublish" disabled>📢 发布</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toasts" id="toastBox"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

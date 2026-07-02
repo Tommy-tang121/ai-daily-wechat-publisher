@@ -1,0 +1,18 @@
+# 密钥环境变量（包含 API Key、Secret 等敏感信息）
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 生成的封面图片（可按需保留或取消注释）
+# app/static/covers/
+
+# 日志
+app/logs/
+*.log
+
+# node_modules（发布 skill 的 npm 依赖，体积巨大）
+node_modules/
+skills/baoyu-post-to-wechat/scripts/node_modules/
