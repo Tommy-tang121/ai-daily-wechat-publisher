@@ -184,7 +184,7 @@ load_env()  # 加载 .env → os.environ，仅执行一次（_ENV_LOADED 守卫�
 LLM_BASE_URL=https://apihub.agnes-ai.com/v1
 LLM_API_KEY=sk-xxxx
 LLM_MODEL=agnes-2.0-flash
-WECHAT_APP_ID=wx880aaf9e3da49f63
+WECHAT_APP_ID=wx0000000000000000
 WECHAT_APP_SECRET=xxxx
 ```
 
@@ -1036,7 +1036,7 @@ python app/run_daily.py >> app\logs\scheduled.log 2>&1
 LLM_BASE_URL=https://apihub.agnes-ai.com/v1
 LLM_API_KEY=sk-xxxx
 LLM_MODEL=agnes-2.0-flash
-WECHAT_APP_ID=wx880aaf9e3da49f63
+WECHAT_APP_ID=wx0000000000000000
 WECHAT_APP_SECRET=xxxx
 ```
 
