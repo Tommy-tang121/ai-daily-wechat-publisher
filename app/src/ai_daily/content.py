@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 
 class ContentError(RuntimeError):
@@ -18,9 +19,10 @@ class Content:
         if not items or any(not item.get("source_url") for item in items):
             raise ContentError("抓取结果缺少可追溯链接")
         batch_size = settings.get("batch_size", 10)
-        rewritten_items = []
-        for start in range(0, len(items), batch_size):
-            rewritten_items.extend(self._rewrite_batch(date, items[start:start + batch_size], settings))
+        batches = [items[start:start + batch_size] for start in range(0, len(items), batch_size)]
+        with ThreadPoolExecutor(max_workers=len(batches)) as executor:
+            futures = [executor.submit(self._rewrite_batch, date, batch, settings) for batch in batches]
+            rewritten_items = [item for future in futures for item in future.result()]
         markdown = "\n\n".join(f"**{x['title']}**\n\n{x['body']}\n\n来源：[ {x['source']} ]({x['source_url']})" for x in rewritten_items)
         return {"date": date, "items": rewritten_items, "markdown": markdown}
 

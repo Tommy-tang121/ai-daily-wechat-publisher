@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -32,13 +33,15 @@ class WorkflowTests(unittest.TestCase):
     def test_content_rewrites_all_items_in_safe_batches(self):
         source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(25)]
         calls = []
+        barrier = threading.Barrier(3)
         def llm(messages):
             batch = __import__("json").loads(messages[1]["content"])["sources"]
+            barrier.wait(timeout=1)
             calls.append(len(batch))
             return '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in batch) + ']}'
         article = Content(source, llm).build("2026-07-10", {})
         self.assertEqual(len(article["items"]), 25)
-        self.assertEqual(calls, [10, 10, 5])
+        self.assertEqual(sorted(calls), [5, 10, 10])
 
     def test_publish_same_ready_run_calls_adapter_once(self):
         calls = []
