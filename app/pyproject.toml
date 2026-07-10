@@ -1,0 +1,21 @@
+[project]
+name = "ai-daily"
+version = "2.0.0"
+description = "Local AI daily-news publisher"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+  "flask>=3.1,<4",
+  "pillow>=12,<13",
+  "requests>=2.32,<3",
+  "waitress>=3.0,<4",
+]
+
+[dependency-groups]
+dev = ["pytest>=9,<10"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
