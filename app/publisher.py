@@ -4,7 +4,7 @@ import json
 import tempfile
 import shutil
 
-SKILL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "skills", "baoyu-post-to-wechat")
+SKILL_DIR = os.path.join(os.path.dirname(__file__), "vendor", "baoyu-post-to-wechat")
 SCRIPTS_DIR = os.path.join(SKILL_DIR, "scripts")
 BUN = (
     shutil.which("bun")
