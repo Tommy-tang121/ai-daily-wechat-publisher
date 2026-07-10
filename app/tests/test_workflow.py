@@ -23,6 +23,18 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(ContentError):
             Content(source, lambda messages: "not json").build("2026-07-10", {})
 
+    def test_content_accepts_legacy_rewritten_json_inside_a_code_block(self):
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        raw = '```json\n{"items":[{"title":"R","rewritten":"rewritten"}]}\n```'
+        article = Content(source, lambda messages: raw).build("2026-07-10", {})
+        self.assertEqual(article["items"][0]["body"], "rewritten")
+
+    def test_content_limits_a_daily_run_to_ten_items(self):
+        source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(11)]
+        raw = '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in range(10)) + ']}'
+        article = Content(source, lambda messages: raw).build("2026-07-10", {})
+        self.assertEqual(len(article["items"]), 10)
+
     def test_publish_same_ready_run_calls_adapter_once(self):
         calls = []
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]

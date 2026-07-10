@@ -51,14 +51,23 @@ class AihotSource:
 class OpenAiCompatibleLlm:
     def __call__(self, messages: list[dict]) -> str:
         import requests
+        import time
         api_key = os.environ.get("LLM_API_KEY")
         if not api_key:
             raise RuntimeError("未配置 LLM_API_KEY")
         base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         payload = {"model": os.environ.get("LLM_MODEL", "gpt-4o-mini"), "messages": messages, "max_tokens": 8000}
-        response = requests.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {api_key}"}, json=payload, timeout=(15, 120))
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = requests.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {api_key}"}, json=payload, timeout=(15, 120))
+                response.raise_for_status()
+                return response.json()["choices"][0]["message"]["content"]
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+        raise RuntimeError(f"LLM 连接失败：{last_error}")
 
 
 def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
