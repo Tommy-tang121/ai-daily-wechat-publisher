@@ -7,6 +7,9 @@ class DailyRun:
     def __init__(self, store, content, publisher):
         self.store, self.content, self.publisher = store, content, publisher
 
+    def get(self, run_id: str):
+        return self.store.get(run_id)
+
     def prepare(self, date: str, settings: dict):
         run = self.store.claim(date)
         if not run.owner:

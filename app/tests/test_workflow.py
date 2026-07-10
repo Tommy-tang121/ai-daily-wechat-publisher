@@ -33,3 +33,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(runner.publish("2026-07-10").media_id, "draft-1")
         self.assertEqual(runner.publish("2026-07-10").media_id, "draft-1")
         self.assertEqual(len(calls), 1)
+
+    def test_get_reads_the_persisted_run(self):
+        runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), None, None)
+        run = runner.store.claim("2026-07-10")
+        self.assertEqual(runner.get(run.id).date, "2026-07-10")
