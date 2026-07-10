@@ -29,11 +29,16 @@ class WorkflowTests(unittest.TestCase):
         article = Content(source, lambda messages: raw).build("2026-07-10", {})
         self.assertEqual(article["items"][0]["body"], "rewritten")
 
-    def test_content_limits_a_daily_run_to_ten_items(self):
-        source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(11)]
-        raw = '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in range(10)) + ']}'
-        article = Content(source, lambda messages: raw).build("2026-07-10", {})
-        self.assertEqual(len(article["items"]), 10)
+    def test_content_rewrites_all_items_in_safe_batches(self):
+        source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(25)]
+        calls = []
+        def llm(messages):
+            batch = __import__("json").loads(messages[1]["content"])["sources"]
+            calls.append(len(batch))
+            return '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in batch) + ']}'
+        article = Content(source, llm).build("2026-07-10", {})
+        self.assertEqual(len(article["items"]), 25)
+        self.assertEqual(calls, [10, 10, 5])
 
     def test_publish_same_ready_run_calls_adapter_once(self):
         calls = []

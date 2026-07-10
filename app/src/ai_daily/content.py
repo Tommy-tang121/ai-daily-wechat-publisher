@@ -14,9 +14,17 @@ class Content:
         self.llm = llm
 
     def build(self, date: str, settings: dict) -> dict:
-        items = self.source(date)[: settings.get("max_items", 10)]
+        items = self.source(date)
         if not items or any(not item.get("source_url") for item in items):
             raise ContentError("抓取结果缺少可追溯链接")
+        batch_size = settings.get("batch_size", 10)
+        rewritten_items = []
+        for start in range(0, len(items), batch_size):
+            rewritten_items.extend(self._rewrite_batch(date, items[start:start + batch_size], settings))
+        markdown = "\n\n".join(f"**{x['title']}**\n\n{x['body']}\n\n来源：[ {x['source']} ]({x['source_url']})" for x in rewritten_items)
+        return {"date": date, "items": rewritten_items, "markdown": markdown}
+
+    def _rewrite_batch(self, date: str, items: list[dict], settings: dict) -> list[dict]:
         prompt_path = Path(__file__).parents[2] / "prompts" / "rewrite.md"
         prompt = prompt_path.read_text(encoding="utf-8").split("## 用户输入", 1)[0].replace("{{MAX_CHARS}}", str(settings.get("max_words", 150)))
         messages = [
@@ -37,5 +45,4 @@ class Content:
         for origin, edited in zip(items, rewritten):
             result.append({"title": edited["title"], "body": edited.get("body") or edited["rewritten"], "source": origin.get("source", ""),
                            "source_url": origin["source_url"], "category": origin.get("category", "行业动态")})
-        markdown = "\n\n".join(f"**{x['title']}**\n\n{x['body']}\n\n来源：[ {x['source']} ]({x['source_url']})" for x in result)
-        return {"date": date, "items": result, "markdown": markdown}
+        return result
