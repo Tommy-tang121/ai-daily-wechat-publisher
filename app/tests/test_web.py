@@ -17,13 +17,13 @@ class Run:
 
 class FakeRunner:
     def __init__(self): self.run = Run()
-    def prepare(self, date, settings): return self.run
+    def prepare(self, date, settings, retry=False): return self.run
     def publish(self, date): self.run.state, self.run.media_id = "published", "draft-1"; return self.run
     def get(self, run_id): return self.run
 
 
 class FailingRunner:
-    def prepare(self, date, settings):
+    def prepare(self, date, settings, retry=False):
         raise RuntimeError("source unavailable")
 
 

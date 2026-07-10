@@ -31,7 +31,11 @@ def load_environment(app_dir: Path) -> None:
 class AihotSource:
     def __call__(self, date: str) -> list[dict]:
         import requests
-        response = requests.get(f"https://aihot.virxact.com/api/public/daily/{date}", timeout=20)
+        response = requests.get(
+            f"https://aihot.virxact.com/api/public/daily/{date}",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36", "Accept": "application/json"},
+            timeout=20,
+        )
         response.raise_for_status()
         items = []
         for section in response.json().get("sections", []):

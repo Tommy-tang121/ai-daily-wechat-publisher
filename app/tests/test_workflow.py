@@ -38,3 +38,12 @@ class WorkflowTests(unittest.TestCase):
         runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), None, None)
         run = runner.store.claim("2026-07-10")
         self.assertEqual(runner.get(run.id).date, "2026-07-10")
+
+    def test_prepare_retries_an_explicitly_failed_date(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        old = store.claim("2026-07-10")
+        store.transition(old.id, "failed", "source error")
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        run = DailyRun(store, Content(source, llm), None).prepare("2026-07-10", {}, retry=True)
+        self.assertEqual(run.state, "ready")

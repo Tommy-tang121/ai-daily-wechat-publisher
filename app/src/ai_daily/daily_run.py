@@ -10,8 +10,10 @@ class DailyRun:
     def get(self, run_id: str):
         return self.store.get(run_id)
 
-    def prepare(self, date: str, settings: dict):
+    def prepare(self, date: str, settings: dict, retry: bool = False):
         run = self.store.claim(date)
+        if retry and run.state == "failed":
+            run = self.store.retry(run.id)
         if not run.owner:
             return run
         try:
