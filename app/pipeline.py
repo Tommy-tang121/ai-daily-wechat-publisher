@@ -22,7 +22,8 @@ def run_pipeline(date_str, max_words=150, on_progress=None):
     def _progress(cur, tot):
         if on_progress:
             pct = 25 + int(25 * cur / max(tot, 1))
-            on_progress("rewriting", "progress", f"重写中 ({cur}/{tot})...", pct)
+            msg = "正在请求 AI 改写（约 30 秒）..." if cur == 0 else f"重写中 ({cur}/{tot})..."
+            on_progress("rewriting", "progress", msg, pct)
 
     result = rewrite_news(items, max_words, _progress)
 

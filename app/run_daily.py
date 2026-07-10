@@ -9,9 +9,17 @@ from app.publisher import publish_article
 from app.config import get_config
 
 
+def _log(msg):
+    log_path = os.path.join(os.path.dirname(__file__), "logs", "scheduled.log")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"{msg}\n")
+    print(msg)
+
+
 def run():
     date_str = datetime.now().strftime("%Y-%m-%d")
-    print(f"[{datetime.now()}] 开始处理: {date_str}")
+    _log(f"[{datetime.now()}] 开始处理: {date_str}")
 
     title = f"AI 行业热点新闻 | {date_str}"
     from app.config import set_config
@@ -19,18 +27,26 @@ def run():
 
     try:
         result = run_pipeline(date_str, get_config("max_words"))
-    except PipelineError as e:
-        print(f"处理失败: {e}")
+    except Exception as e:
+        _log(f"处理失败 ({type(e).__name__}): {e}")
+        import traceback
+        _log(traceback.format_exc())
         return 1
 
     pub_result = publish_article(date_str, result)
     if pub_result.get("success"):
-        print(f"发布成功，草稿ID: {pub_result.get('media_id', '')}")
+        _log(f"发布成功，草稿ID: {pub_result.get('media_id', '')}")
         return 0
     else:
-        print(f"发布失败: {pub_result.get('error', '')}")
+        _log(f"发布失败: {pub_result.get('error', '')}")
         return 1
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    try:
+        sys.exit(run())
+    except Exception as e:
+        _log(f"未捕获异常 ({type(e).__name__}): {e}")
+        import traceback
+        _log(traceback.format_exc())
+        sys.exit(1)

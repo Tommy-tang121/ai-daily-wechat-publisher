@@ -20,7 +20,7 @@ def _call_agnes(messages, max_tokens=8000):
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={"model": model, "messages": messages, "max_tokens": max_tokens},
-                timeout=(10, 60)
+                timeout=(15, 120)
             )
             resp.raise_for_status()
             data = resp.json()
@@ -29,7 +29,7 @@ def _call_agnes(messages, max_tokens=8000):
             last_err = str(e)
             if attempt < 2:
                 import time
-                time.sleep((2 ** attempt) * 2)
+                time.sleep((2 ** attempt) * 5)
     return None, last_err
 
 def rewrite_news(items, max_words=150, progress_callback=None):
@@ -46,7 +46,7 @@ def rewrite_news(items, max_words=150, progress_callback=None):
     prompt = _load_prompt().replace("{{MAX_CHARS}}", str(max_words)).replace("{{DAILY_DATA}}", daily_data)
 
     if progress_callback:
-        progress_callback(1, len(items))
+        progress_callback(0, len(items))
 
     raw, err = _call_agnes([
         {"role": "system", "content": prompt},

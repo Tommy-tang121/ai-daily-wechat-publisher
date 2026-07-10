@@ -6,7 +6,12 @@ import shutil
 
 SKILL_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "skills", "baoyu-post-to-wechat")
 SCRIPTS_DIR = os.path.join(SKILL_DIR, "scripts")
-BUN = shutil.which("bun") or "bun.cmd"
+BUN = (
+    shutil.which("bun")
+    or shutil.which("bun.cmd")
+    or os.path.expanduser(r"~\AppData\Roaming\npm\bun.cmd")
+    or "bun.cmd"
+)
 
 def _load_env(env_path):
     env = {}
