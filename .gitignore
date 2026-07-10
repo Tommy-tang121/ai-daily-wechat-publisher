@@ -1,8 +1,10 @@
 # 本地批处理文件（含本地路径和用户名，不上传）
-*.bat
+# Legacy root batch files are ignored; tracked scripts live in app/scripts.
+/*.bat
 
 # 密钥环境变量（包含 API Key、Secret 等敏感信息）
 .env
+app/.env
 
 # Agent 工作规则（个人使用，不上传）
 AGENTS.md
@@ -24,7 +26,10 @@ __pycache__/
 # 日志
 app/logs/
 *.log
+app/data/*.db
+app/data/*.db-shm
+app/data/*.db-wal
 
 # node_modules（发布 skill 的 npm 依赖，体积巨大）
 node_modules/
-skills/baoyu-post-to-wechat/scripts/node_modules/
+app/vendor/*/scripts/node_modules/
