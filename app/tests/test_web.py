@@ -37,6 +37,7 @@ class WebTests(unittest.TestCase):
         response = create_app(FakeRunner()).test_client().get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"AI Daily", response.data)
+        self.assertIn("约 4–5 分钟".encode(), response.data)
 
     def test_prepare_and_publish_use_the_same_persisted_run(self):
         client = create_app(FakeRunner()).test_client()
