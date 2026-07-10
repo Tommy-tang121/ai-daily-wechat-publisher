@@ -22,7 +22,17 @@ class FakeRunner:
     def get(self, run_id): return self.run
 
 
+class FailingRunner:
+    def prepare(self, date, settings):
+        raise RuntimeError("source unavailable")
+
+
 class WebTests(unittest.TestCase):
+    def test_prepare_failure_is_json_not_html(self):
+        response = create_app(FailingRunner()).test_client().post("/api/runs", json={"date": "2026-07-10"})
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.get_json()["error"], "source unavailable")
+
     def test_home_page_is_available(self):
         response = create_app(FakeRunner()).test_client().get("/")
         self.assertEqual(response.status_code, 200)

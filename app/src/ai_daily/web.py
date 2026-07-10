@@ -28,7 +28,10 @@ def create_app(runner, settings=None):
         date = (request.get_json(silent=True) or {}).get("date")
         if not date:
             return jsonify(error="请选择日期"), 400
-        return jsonify(_payload(runner.prepare(date, settings)))
+        try:
+            return jsonify(_payload(runner.prepare(date, settings)))
+        except Exception as exc:
+            return jsonify(error=str(exc)), 502
 
     @app.get("/api/runs/<run_id>")
     def read(run_id):
