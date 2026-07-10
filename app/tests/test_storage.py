@@ -34,3 +34,10 @@ class StoreTests(unittest.TestCase):
         run = self.store.claim("2026-07-10")
         with self.assertRaises(InvalidTransition):
             self.store.transition(run.id, "published")
+
+    def test_failed_run_can_be_explicitly_retried(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "failed", "temporary error")
+        retried = self.store.retry(run.id)
+        self.assertEqual(retried.state, "queued")
+        self.assertTrue(retried.owner)

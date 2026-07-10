@@ -105,3 +105,12 @@ class Store:
             db.execute("UPDATE daily_runs SET state='published', media_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                        (media_id, run_id))
         return self.get(run_id)
+
+    def retry(self, run_id: str) -> Run:
+        with closing(self._connect()) as db, db:
+            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != "failed":
+                raise InvalidTransition("only failed runs can be retried")
+            db.execute("UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (run_id,))
+        run = self.get(run_id)
+        return Run(run.id, run.date, run.state, True, run.media_id, run.article, run.error)
