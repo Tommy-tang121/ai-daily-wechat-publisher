@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .cover import generate_cover
+
 
 VENDOR_SCRIPTS = Path(__file__).parents[2] / "vendor" / "baoyu-post-to-wechat" / "scripts"
 
@@ -24,11 +26,12 @@ class WeChatPublisher:
         bun = shutil.which("bun") or shutil.which("bun.cmd")
         if not bun or not (VENDOR_SCRIPTS / "wechat-api.ts").is_file():
             raise RuntimeError("微信发布环境不完整：缺少 Bun 或发布脚本")
+        cover = self.cover or str(generate_cover(Path(__file__).parents[2] / "static" / "covers", article["date"], self.title))
         with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as file:
             file.write(article["markdown"])
             path = Path(file.name)
         try:
-            result = subprocess.run(build_wechat_command(bun, path, self.title, self.cover, self.author),
+            result = subprocess.run(build_wechat_command(bun, path, self.title, cover, self.author),
                                     cwd=VENDOR_SCRIPTS, capture_output=True, text=True, timeout=120)
             if result.returncode:
                 raise RuntimeError((result.stderr or "微信草稿创建失败").strip()[:500])
