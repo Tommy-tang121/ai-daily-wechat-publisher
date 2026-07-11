@@ -51,6 +51,11 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(document.findtext(".//task:Principal/task:LogonType", namespaces=namespace), "InteractiveToken")
         self.assertIn('"E:\\App Development\\AI Daily\\app\\scripts\\run_scheduled.bat"', document.findtext(".//task:Actions/task:Exec/task:Arguments", namespaces=namespace))
 
+    def test_task_xml_declares_the_utf16_encoding_used_for_windows_task_files(self):
+        definition = task_xml("09:30", Path("run_scheduled.bat"))
+
+        self.assertIn("encoding='utf-16'", definition.splitlines()[0])
+
     def test_windows_tasks_installs_new_task_before_removing_legacy_check_task(self):
         runner = RecordingRunner(
             Completed(),

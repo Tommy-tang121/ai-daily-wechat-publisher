@@ -57,7 +57,7 @@ def task_xml(schedule_time: str, script: Path) -> str:
     ET.SubElement(action, tag("Command")).text = "cmd.exe"
     ET.SubElement(action, tag("Arguments")).text = f'/d /c "{task_arguments(script)}"'
     ET.SubElement(action, tag("WorkingDirectory")).text = str(script.parent)
-    return ET.tostring(root, encoding="unicode", xml_declaration=True)
+    return ET.tostring(root, encoding="unicode", xml_declaration=True).replace("utf-8", "utf-16", 1)
 
 
 def install(schedule_time: str, script: Path, runner=subprocess.run) -> None:
