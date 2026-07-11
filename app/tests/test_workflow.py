@@ -138,6 +138,25 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             runner.get(ready.id)
 
+    def test_successful_publish_discards_the_run_when_cleanup_fails(self):
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        cleanup = lambda article: (_ for _ in ()).throw(RuntimeError("cover cleanup unavailable"))
+        runner = DailyRun(
+            Store(Path(self.tmp.name) / "daily.db"),
+            Content(source, self.valid_llm),
+            lambda article: "draft-1",
+            cleanup=cleanup,
+        )
+        ready = runner.prepare("2026-07-10", {})
+
+        published = runner.publish("2026-07-10")
+
+        self.assertEqual(published.state, "published")
+        self.assertEqual(published.media_id, "draft-1")
+        self.assertIsNone(published.article)
+        with self.assertRaises(KeyError):
+            runner.get(ready.id)
+
     def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         llm = self.valid_llm

@@ -49,8 +49,8 @@ class StoreTests(unittest.TestCase):
             self.assertIsNone(db.execute("SELECT 1 FROM daily_runs WHERE id=?", (run.id,)).fetchone())
             self.assertIsNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (run.id,)).fetchone())
 
-    def test_claim_fresh_replaces_ready_failed_and_published_runs(self):
-        for state in ("ready", "failed", "published"):
+    def test_claim_fresh_replaces_ready_and_failed_runs(self):
+        for state in ("ready", "failed"):
             with self.subTest(state=state):
                 date = f"2026-07-{11 + len(state)}"
                 old = self.store.claim(date)
@@ -59,14 +59,8 @@ class StoreTests(unittest.TestCase):
                     self.store.transition(old.id, "scraping")
                     self.store.transition(old.id, "rewriting")
                     self.store.save_article(old.id, {"markdown": "article"})
-                elif state == "failed":
-                    self.store.transition(old.id, "failed", "source unavailable")
                 else:
-                    self.store.transition(old.id, "scraping")
-                    self.store.transition(old.id, "rewriting")
-                    self.store.save_article(old.id, {"markdown": "article"})
-                    self.store.transition(old.id, "publishing")
-                    self.store.mark_published(old.id, "media-1")
+                    self.store.transition(old.id, "failed", "source unavailable")
 
                 fresh = self.store.claim_fresh(date)
 
@@ -78,6 +72,21 @@ class StoreTests(unittest.TestCase):
                     self.store.get(old.id)
                 with closing(self.store._connect()) as db:
                     self.assertIsNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (old.id,)).fetchone())
+
+    def test_claim_fresh_keeps_a_just_published_run_until_discard(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article"})
+        self.store.transition(run.id, "publishing")
+        self.store.mark_published(run.id, "media-1")
+
+        claimed = self.store.claim_fresh("2026-07-10")
+
+        self.assertFalse(claimed.owner)
+        self.assertEqual(claimed.id, run.id)
+        self.assertEqual(claimed.state, "published")
+        self.assertEqual(claimed.media_id, "media-1")
 
     def test_claim_fresh_keeps_active_runs(self):
         for state in ("queued", "scraping", "rewriting", "publishing"):

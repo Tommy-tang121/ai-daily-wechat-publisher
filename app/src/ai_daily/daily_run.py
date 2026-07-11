@@ -102,7 +102,10 @@ class DailyRun:
             logger.error("run=%s stage=failed error=%s", run.id, type(exc).__name__)
             raise
         if self.cleanup:
-            self.cleanup(article)
+            try:
+                self.cleanup(article)
+            except Exception as exc:
+                logger.warning("run=%s stage=cleanup_failed error=%s", run.id, type(exc).__name__)
         self.store.discard(run.id)
         logger.info("run=%s stage=published", run.id)
         return replace(published, article=None)
