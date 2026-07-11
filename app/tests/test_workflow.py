@@ -157,6 +157,26 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             runner.get(ready.id)
 
+    def test_successful_publish_returns_when_cleanup_starts_a_fresh_run(self):
+        date = "2026-07-10"
+        store = Store(Path(self.tmp.name) / "daily.db")
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        fresh_runs = []
+        cleanup = lambda article: fresh_runs.append(store.claim_fresh(date))
+        runner = DailyRun(store, Content(source, self.valid_llm), lambda article: "draft-1", cleanup=cleanup)
+        old = runner.prepare(date, {})
+
+        published = runner.publish(date)
+
+        self.assertEqual(published.state, "published")
+        self.assertEqual(published.media_id, "draft-1")
+        self.assertIsNone(published.article)
+        with self.assertRaises(KeyError):
+            runner.get(old.id)
+        self.assertEqual(len(fresh_runs), 1)
+        self.assertTrue(fresh_runs[0].owner)
+        self.assertEqual(store.get(fresh_runs[0].id).state, "queued")
+
     def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         llm = self.valid_llm

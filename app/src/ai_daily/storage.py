@@ -76,7 +76,7 @@ class Store:
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM daily_runs WHERE date=?", (date,)).fetchone()
-            if row and row["state"] not in {"ready", "failed"}:
+            if row and row["state"] not in {"ready", "failed", "published"}:
                 return self._run(row)
             if row:
                 db.execute("DELETE FROM run_events WHERE run_id=?", (row["id"],))
