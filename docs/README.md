@@ -1,122 +1,51 @@
-# AI Daily — 微信公众号每日 AI 资讯发布工具
+# AI Daily
 
-每天自动抓取 AI 资讯，改写后发布到微信公众号（草稿箱）。
+本地运行的 AI 日报编辑与微信公众号草稿工具。它抓取当天全部可用资讯，按批改写，生成封面；只有收到微信草稿回执后，才会标为已发布。
 
-## 它能做什么
+## 日常使用
 
-- 每天 10:00 自动抓取国内外 AI 新闻
-- 用 LLM 改写内容，生成符合公众号风格的文章
-- 自动生成头图（900×500 报纸风格）
-- 发布到微信公众号的草稿箱，你登录公众号手动群发即可
-- 10:05 弹出通知，告诉你发布结果
+1. 双击 `app/scripts/run_preview.bat` 做生成、预览和封面测试。预览模式禁止创建微信草稿。
+2. 双击 `app/scripts/run_web.bat` 打开正式 Web 页面。
+3. 在页面选择日期，点击“抓取”。页面会显示持久化进度；刷新或重新打开后不会重新调用模型。
+4. 文章状态显示“已生成，尚未发布”时，可预览、复制或查看封面；确认后再点击“发布”。
+5. 设置每日时间并点击“保存”，会更新唯一的 Windows 任务 `AI Daily Publisher`。任务失败后每 15 分钟重试，最多 3 次。
 
-## 你需要准备什么
+## 首次安装
 
-### 1. 一个微信公众号
-- 个人或机构号都可以
-- 在公众号后台 → 设置与开发 → 基本配置 → 获取 AppID 和 AppSecret
-- 把服务器 IP 添加到 IP 白名单
-
-### 2. 一个 LLM API 密钥
-用来改写文章，支持的格式与 OpenAI API 兼容，比如：
-- DeepSeek / 月之暗面 / 阿里通义千问 等
-
-### 3. 安装 Python
-项目需要 Python 3.11+，添加环境变量。
-安装后打开命令提示符，测试：
-```bash
-python --version
-```
-能正常显示版本号就可以。
-
-### 4. 安装依赖
 在项目根目录运行：
-```bash
-pip install -r requirements.txt
+
+```powershell
+py -m pip install --user uv
+Copy-Item app/.env.example app/.env
+py -m uv sync --project app --locked
 ```
 
-## 快速开始
+编辑 `app/.env`，填写 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。密钥不进入 Git。
 
-### 1. 配置
+还需要安装 Bun，供已复用的微信草稿发布器运行。
 
-在项目根目录新建 `.env` 文件（不是 .env.txt），填写：
+## 运行边界
 
-```ini
-LLM_API_KEY=sk-你的密钥
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
-WECHAT_APP_ID=wx你的AppID
-WECHAT_APP_SECRET=你的AppSecret
+- 不需要服务器；Windows 电脑必须开机且当前用户保持登录，计划任务才能执行。
+- 微信 IP 白名单仍需每天由你手动更新；这是当前明确保留的人工步骤。
+- 同一天只会保留一条运行记录。已生成或已发布的记录会复用，避免重复调用模型或重复创建草稿。
+- 处理超过 30 分钟仍无进展的旧任务，才允许定时重试接管；正常运行不会重复执行。
+
+## 开发验证
+
+```powershell
+py -m uv run --project app python -m unittest discover -s app/tests -v
+Push-Location app/vendor/baoyu-post-to-wechat; bun test; Pop-Location
+py -m uv pip check
+git diff --check
 ```
 
-### 2. 启动 Web 界面
+## 目录
 
-双击 `run.bat` 或命令行运行：
-```bash
-python app/main.py
+```text
+app/     运行代码、依赖、脚本、测试、第三方发布器
+design/  当前页面的视觉和交互参考
+docs/    产品说明、技术规格、实施记录和第三方说明
 ```
 
-浏览器打开
-- 定时设置：设定每天几点发布（默认 10:00）
-- 手动测试：点「拉取并预览」查看当天文章，点「发布」手动发到公众号
-- 配置管理：API 密钥、公众号参数
-
-### 3. 开启自动发布
-
-在 Web 界面点「部署定时任务」，自动创建两个 Windows 任务：
-- **AI Daily Publisher**（每天 10:00）
-- **AI Daily Publisher - Check**（每天 10:05，弹窗通知结果）
-
-也可以在命令行手动部署：
-```bash
-python app/scheduler.py
-```
-
-## 每天发生了什么
-
-| 时间 | 动作 |
-|------|------|
-| 10:00 | 抓取当天 AI 资讯 → LLM 改写 → 生成封面图 → 发布到公众号草稿箱 |
-| 10:05 | 弹窗告诉你发布成功还是失败 |
-
-如果电脑在休眠，任务会自动唤醒电脑执行。
-如果没插电源，任务也会正常执行（默认不会）。
-
-## 目录结构
-
-```
-app/              # 主程序
-  main.py           # Web 界面 (Flask)
-  pipeline.py       # 发布流程编排
-  scraper.py        # 抓取 AI 资讯
-  rewriter.py       # LLM 改写内容
-  formatter.py      # 格式化公众号文章
-  cover_generator.py # 生成封面图
-  publisher.py      # 发布到微信
-  scheduler.py      # Windows 定时任务管理
-  check_daily.py    # 10:05 结果检查
-  env.py            # 环境变量读取
-docs/             # 文档
-design/           # 设计参考
-```
-
-## 参数说明（在 Web 界面修改）
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| 定时时间 | 每天自动发布的时间 | 10:00 |
-| 封面标题 | 封面图上的大标题 | 今日AI日报 |
-| 封面署名 | 封面图上的小字 | AI Daily |
-| 署名链接 | 点击署名跳转的链接 | (空) |
-| 署名二维码 | 署名旁边的二维码图片 URL | (空) |
-
-## 常见问题
-
-**发布成功但公众号草稿箱里看不到？**
-检查 IP 白名单：公众号后台 → 设置 → 基本配置 → IP 白名单，把运行本工具的服务器 IP 加进去。
-
-**定时任务没有运行？**
-Windows 可能因电源设置跳过了任务。在 Web 界面重新「部署定时任务」会自动修正电源设置。
-
-**文章内容不全？**
-检查 LLM API 密钥余额是否充足。改写需要较大上下文，如果模型不支持长输出可能需要调整 `max_tokens`。
+回退到重构前版本可使用 Git 标签 `checkpoint-20260710-before-stability-refactor`。

@@ -2,7 +2,9 @@ import argparse
 from pathlib import Path
 
 from .runtime import build_runner
+from .scheduler import WindowsTasks
 from .web import create_app
+from .logging import configure_logging
 
 
 def serve_preview(app, flask_runner, waitress_runner=None):
@@ -18,14 +20,15 @@ def main():
     parser.add_argument("--preview", action="store_true")
     args = parser.parse_args()
     app_dir = Path(__file__).parents[2]
+    configure_logging(app_dir / "data" / "ai_daily.log")
     runner = build_runner(app_dir, args.preview)
     if args.command == "daily":
         from datetime import date
-        run = runner.prepare(date.today().isoformat(), {})
+        run = runner.prepare(date.today().isoformat(), {}, retry=True)
         if not args.preview:
             runner.publish(run.date)
         return
-    web = create_app(runner)
+    web = create_app(runner, tasks=WindowsTasks(app_dir / "scripts" / "run_scheduled.bat"))
     try:
         from waitress import serve
         serve_preview(web, None, lambda app: serve(app, host="127.0.0.1", port=5000))

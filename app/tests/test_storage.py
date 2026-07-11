@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
@@ -41,3 +42,32 @@ class StoreTests(unittest.TestCase):
         retried = self.store.retry(run.id)
         self.assertEqual(retried.state, "queued")
         self.assertTrue(retried.owner)
+
+    def test_events_are_persisted_in_the_order_they_happened(self):
+        run = self.store.claim("2026-07-10")
+        self.store.record_event(run.id, "scraping", "progress", "Fetching sources")
+        self.store.record_event(run.id, "rewriting", "progress", "Rewriting batch 1 of 3")
+        self.assertEqual(
+            self.store.events(run.id),
+            [
+                {"stage": "scraping", "status": "progress", "message": "Fetching sources"},
+                {"stage": "rewriting", "status": "progress", "message": "Rewriting batch 1 of 3"},
+            ],
+        )
+
+    def test_settings_keep_defaults_and_persist_user_changes(self):
+        defaults = {"title": "Daily", "max_words": 150}
+        self.store.initialize_settings(defaults)
+        self.store.update_settings({"title": "Updated", "max_words": 200})
+        self.assertEqual(self.store.settings(defaults), {"title": "Updated", "max_words": 200})
+
+    def test_stale_active_run_can_be_safely_reclaimed_for_retry(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        with closing(self.store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+
+        reclaimed = self.store.reclaim_stale(run.id, minutes=30)
+
+        self.assertTrue(reclaimed.owner)
+        self.assertEqual(reclaimed.state, "queued")

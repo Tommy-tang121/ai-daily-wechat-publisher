@@ -1,3 +1,18 @@
+@font-face {
+  font-family: 'Caveat';
+  src: url('/fonts/Caveat[wght].ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Lora';
+  src: url('/fonts/Lora[wght].ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'ZCOOL KuaiLe';
+  src: url('/fonts/ZCOOLKuaiLe-Regular.ttf') format('truetype');
+}
+
 :root {
   --paper: #F2E4BD;
   --paper-warm: #EDDDB0;

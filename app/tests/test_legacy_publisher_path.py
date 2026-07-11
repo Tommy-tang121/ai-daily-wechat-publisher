@@ -1,12 +1,13 @@
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parents[1]))
+import sys
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 
-class LegacyPublisherPathTests(unittest.TestCase):
+class PublisherPathTests(unittest.TestCase):
     def test_vendored_wechat_script_path_exists(self):
-        from app.publisher import SCRIPTS_DIR
+        from ai_daily.publishing import VENDOR_SCRIPTS
 
-        self.assertTrue(Path(SCRIPTS_DIR).is_dir())
+        self.assertTrue(Path(VENDOR_SCRIPTS).is_dir())

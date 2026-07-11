@@ -43,6 +43,13 @@ class Store:
                 article TEXT, media_id TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS run_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+                stage TEXT NOT NULL, status TEXT NOT NULL, message TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(run_id) REFERENCES daily_runs(id))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -114,3 +121,63 @@ class Store:
             db.execute("UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (run_id,))
         run = self.get(run_id)
         return Run(run.id, run.date, run.state, True, run.media_id, run.article, run.error)
+
+    def reclaim_stale(self, run_id: str, minutes: int) -> Run:
+        age = f"-{minutes} minutes"
+        with closing(self._connect()) as db, db:
+            row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
+                raise KeyError(run_id)
+            if row["state"] not in {"scraping", "rewriting", "publishing"}:
+                return self._run(row)
+            result = db.execute(
+                """UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND updated_at < datetime('now', ?)""",
+                (run_id, age),
+            )
+            if not result.rowcount:
+                return self._run(row)
+        run = self.get(run_id)
+        return Run(run.id, run.date, run.state, True, run.media_id, run.article, run.error)
+
+    def record_event(self, run_id: str, stage: str, status: str, message: str) -> None:
+        with closing(self._connect()) as db, db:
+            exists = db.execute("SELECT 1 FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not exists:
+                raise KeyError(run_id)
+            db.execute(
+                "INSERT INTO run_events(run_id, stage, status, message) VALUES (?, ?, ?, ?)",
+                (run_id, stage, status, message[:500]),
+            )
+
+    def events(self, run_id: str) -> list[dict]:
+        with closing(self._connect()) as db, db:
+            rows = db.execute(
+                "SELECT stage, status, message FROM run_events WHERE run_id=? ORDER BY id",
+                (run_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def initialize_settings(self, defaults: dict) -> None:
+        with closing(self._connect()) as db, db:
+            for key, value in defaults.items():
+                db.execute(
+                    "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                    (key, json.dumps(value, ensure_ascii=False)),
+                )
+
+    def settings(self, defaults: dict) -> dict:
+        self.initialize_settings(defaults)
+        with closing(self._connect()) as db, db:
+            rows = db.execute("SELECT key, value FROM settings").fetchall()
+        values = defaults.copy()
+        values.update({row["key"]: json.loads(row["value"]) for row in rows})
+        return values
+
+    def update_settings(self, values: dict) -> None:
+        with closing(self._connect()) as db, db:
+            for key, value in values.items():
+                db.execute(
+                    "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, json.dumps(value, ensure_ascii=False)),
+                )

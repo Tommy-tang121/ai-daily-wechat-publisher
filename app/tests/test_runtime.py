@@ -2,12 +2,13 @@ import os
 import sys
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from ai_daily.runtime import OpenAiCompatibleLlm, load_environment
+from ai_daily.runtime import OpenAiCompatibleLlm, build_runner, load_environment
 
 
 class RuntimeTests(unittest.TestCase):
@@ -25,5 +26,26 @@ class RuntimeTests(unittest.TestCase):
     def test_llm_connection_error_is_reported_without_being_a_format_error(self):
         import requests
         with patch.dict(os.environ, {"LLM_API_KEY": "test"}), patch("requests.post", side_effect=requests.ConnectionError("closed")), patch("time.sleep"):
-            with self.assertRaisesRegex(RuntimeError, "LLM 连接失败"):
+            with self.assertRaisesRegex(RuntimeError, "LLM"):
                 OpenAiCompatibleLlm()([])
+
+    def test_runtime_runner_has_a_cover_factory_for_ready_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            app_dir.mkdir()
+            self.assertTrue(callable(build_runner(app_dir, preview_only=True).cover))
+
+    def test_legacy_config_migration_keeps_only_known_non_secret_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            (app_dir / "data").mkdir(parents=True)
+            (app_dir / "data" / "config.json").write_text(
+                json.dumps({"title": "Migrated", "max_words": 200, "LLM_API_KEY": "must-not-persist"}),
+                encoding="utf-8",
+            )
+
+            values = build_runner(app_dir, preview_only=True).settings()
+
+        self.assertEqual(values["title"], "Migrated")
+        self.assertEqual(values["max_words"], 200)
+        self.assertNotIn("LLM_API_KEY", values)

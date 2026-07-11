@@ -3,12 +3,13 @@ import os
 from pathlib import Path
 
 from .content import Content
+from .cover import generate_cover
 from .daily_run import DailyRun
 from .publishing import WeChatPublisher
 from .storage import Store
 
 
-DEFAULT_SETTINGS = {"title": "AI 行业热点新闻", "author": "", "max_words": 150}
+DEFAULT_SETTINGS = {"title": "AI 行业热点新闻", "author": "", "max_words": 150, "schedule_time": "10:00"}
 
 
 def load_environment(app_dir: Path) -> None:
@@ -31,9 +32,13 @@ def load_environment(app_dir: Path) -> None:
 class AihotSource:
     def __call__(self, date: str) -> list[dict]:
         import requests
+
         response = requests.get(
             f"https://aihot.virxact.com/api/public/daily/{date}",
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36", "Accept": "application/json"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+                "Accept": "application/json",
+            },
             timeout=20,
         )
         response.raise_for_status()
@@ -42,9 +47,15 @@ class AihotSource:
             for item in section.get("items", []):
                 link = item.get("permalink") or item.get("sourceUrl")
                 if link:
-                    items.append({"title": item.get("title", ""), "summary": item.get("summary", ""),
-                                  "source": item.get("sourceName", ""), "source_url": link,
-                                  "category": section.get("label", "行业动态")})
+                    items.append(
+                        {
+                            "title": item.get("title", ""),
+                            "summary": item.get("summary", ""),
+                            "source": item.get("sourceName", ""),
+                            "source_url": link,
+                            "category": section.get("label", "行业动态"),
+                        }
+                    )
         return items
 
 
@@ -52,21 +63,31 @@ class OpenAiCompatibleLlm:
     def __call__(self, messages: list[dict]) -> str:
         import requests
         import time
+
         api_key = os.environ.get("LLM_API_KEY")
         if not api_key:
             raise RuntimeError("未配置 LLM_API_KEY")
         base = os.environ.get("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-        payload = {"model": os.environ.get("LLM_MODEL", "gpt-4o-mini"), "messages": messages, "max_tokens": 8000}
+        payload = {
+            "model": os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+            "messages": messages,
+            "max_tokens": 8000,
+        }
         last_error = None
         for attempt in range(3):
             try:
-                response = requests.post(f"{base}/chat/completions", headers={"Authorization": f"Bearer {api_key}"}, json=payload, timeout=(15, 120))
+                response = requests.post(
+                    f"{base}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json=payload,
+                    timeout=(15, 120),
+                )
                 response.raise_for_status()
                 return response.json()["choices"][0]["message"]["content"]
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt < 2:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
         raise RuntimeError(f"LLM 连接失败：{last_error}")
 
 
@@ -75,6 +96,28 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
     settings = DEFAULT_SETTINGS.copy()
     legacy = app_dir / "data" / "config.json"
     if legacy.is_file():
-        settings.update(json.loads(legacy.read_text(encoding="utf-8")))
-    publisher = (lambda article: (_ for _ in ()).throw(RuntimeError("预览模式禁止创建微信草稿"))) if preview_only else WeChatPublisher(settings["title"], author=settings["author"])
-    return DailyRun(Store(app_dir / "data" / "ai_daily.db"), Content(AihotSource(), OpenAiCompatibleLlm()), publisher)
+        legacy_values = json.loads(legacy.read_text(encoding="utf-8"))
+        settings.update({key: legacy_values[key] for key in settings if key in legacy_values})
+    publisher = (
+        lambda article: (_ for _ in ()).throw(RuntimeError("预览模式禁止创建微信草稿"))
+        if preview_only
+        else WeChatPublisher(settings["title"], author=settings["author"])
+    )
+
+    def cover(article: dict, values: dict) -> dict:
+        path = generate_cover(
+            app_dir / "static" / "covers",
+            article["date"],
+            values.get("title", settings["title"]),
+        )
+        return {"cover_path": str(path), "cover_url": f"/static/covers/{path.name}"}
+
+    store = Store(app_dir / "data" / "ai_daily.db")
+    store.initialize_settings(settings)
+    return DailyRun(
+        store,
+        Content(AihotSource(), OpenAiCompatibleLlm()),
+        publisher,
+        cover=cover,
+        settings=settings,
+    )

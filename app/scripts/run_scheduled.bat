@@ -1,6 +1,5 @@
 @echo off
 setlocal
 cd /d "%~dp0.."
-set "PYTHONPATH=%CD%\src"
-py -m ai_daily.cli daily
+py -m uv run --project . ai-daily daily
 exit /b %ERRORLEVEL%

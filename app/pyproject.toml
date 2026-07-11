@@ -10,12 +10,16 @@ dependencies = [
   "waitress>=3.0,<4",
 ]
 
+[project.scripts]
+ai-daily = "ai_daily.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
 [dependency-groups]
 dev = ["pytest>=9,<10"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-
-[tool.uv]
-package = false
