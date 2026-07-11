@@ -36,6 +36,56 @@ class CliTests(unittest.TestCase):
         self.assertIsInstance(captured["tasks"], WindowsTasks)
         self.assertEqual(captured["tasks"].script.name, "run_scheduled.bat")
 
+    def test_cleanup_history_uses_the_formal_runner_and_prints_only_safe_summary(self):
+        built = []
+        printed = []
+
+        class Publisher:
+            def delete_draft(self, media_id):
+                self.deleted = media_id
+
+        class Runner:
+            publisher = Publisher()
+
+            def clear_history(self, delete_draft):
+                delete_draft("draft-1")
+                return {"count": 2, "dates": ["2026-07-10", "2026-07-11"]}
+
+        runner = Runner()
+        with (
+            patch.object(cli, "build_runner", side_effect=lambda app_dir, preview: built.append(preview) or runner),
+            patch.object(sys, "argv", ["ai-daily", "cleanup-history"]),
+            patch("builtins.print", side_effect=printed.append),
+        ):
+            cli.main()
+
+        self.assertEqual(built, [False])
+        self.assertEqual(runner.publisher.deleted, "draft-1")
+        self.assertIn("2", printed[0])
+        self.assertIn("2026-07-10", printed[0])
+        self.assertNotIn("draft-1", printed[0])
+
+    def test_cleanup_history_rejects_preview_mode(self):
+        with (
+            patch.object(cli, "build_runner") as build_runner,
+            patch.object(sys, "argv", ["ai-daily", "cleanup-history", "--preview"]),
+            self.assertRaisesRegex(RuntimeError, "formal"),
+        ):
+            cli.main()
+
+        build_runner.assert_not_called()
+
+    def test_cleanup_history_requires_a_draft_deleter(self):
+        class Runner:
+            publisher = lambda article: "draft-1"
+
+        with (
+            patch.object(cli, "build_runner", return_value=Runner()),
+            patch.object(sys, "argv", ["ai-daily", "cleanup-history"]),
+            self.assertRaisesRegex(RuntimeError, "draft deletion"),
+        ):
+            cli.main()
+
     def test_scheduled_daily_command_explicitly_retries_a_failed_date(self):
         captured = {}
 

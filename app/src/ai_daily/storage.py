@@ -93,6 +93,11 @@ class Store:
             raise KeyError(run_id)
         return self._run(row)
 
+    def list_runs(self) -> list[Run]:
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
+        return [self._run(row) for row in rows]
+
     def discard(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")

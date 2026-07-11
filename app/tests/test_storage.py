@@ -142,6 +142,20 @@ class StoreTests(unittest.TestCase):
         self.store.update_settings({"title": "Updated", "max_words": 200})
         self.assertEqual(self.store.settings(defaults), {"title": "Updated", "max_words": 200})
 
+    def test_list_runs_returns_articles_in_date_order_without_mutating_them(self):
+        later = self.store.claim("2026-07-11")
+        earlier = self.store.claim("2026-07-10")
+        self.store.transition(later.id, "scraping")
+        self.store.transition(later.id, "rewriting")
+        self.store.save_article(later.id, {"date": "2026-07-11", "markdown": "saved article"})
+
+        runs = self.store.list_runs()
+
+        self.assertEqual([run.date for run in runs], ["2026-07-10", "2026-07-11"])
+        self.assertEqual(runs[1].article, {"date": "2026-07-11", "markdown": "saved article"})
+        self.assertEqual(self.store.get(earlier.id).state, "queued")
+        self.assertEqual(self.store.get(later.id).article, runs[1].article)
+
     def test_stale_active_run_can_be_safely_reclaimed_for_retry(self):
         run = self.store.claim("2026-07-10")
         self.store.transition(run.id, "scraping")

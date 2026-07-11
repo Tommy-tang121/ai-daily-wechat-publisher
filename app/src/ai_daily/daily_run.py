@@ -31,6 +31,24 @@ class DailyRun:
         self.store.update_settings(values)
         return self.settings()
 
+    def clear_history(self, delete_draft):
+        runs = self.store.list_runs()
+        if any(run.state in {"queued", "scraping", "rewriting", "publishing"} for run in runs):
+            raise RuntimeError("cannot clear history while active runs exist")
+
+        for run in runs:
+            if run.media_id:
+                delete_draft(run.media_id)
+
+        for run in runs:
+            if self.cleanup and run.article:
+                try:
+                    self.cleanup(run.article)
+                except Exception as exc:
+                    logger.warning("run=%s stage=cleanup_failed error=%s", run.id, type(exc).__name__)
+            self.store.discard(run.id)
+        return {"count": len(runs), "dates": [run.date for run in runs]}
+
     def start(self, date: str, settings: dict, retry: bool = False, fresh: bool = False):
         run = self.store.claim_fresh(date) if fresh else self.store.claim(date)
         if not fresh:

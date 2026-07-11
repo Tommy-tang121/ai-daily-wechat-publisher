@@ -177,6 +177,63 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(fresh_runs[0].owner)
         self.assertEqual(store.get(fresh_runs[0].id).state, "queued")
 
+    def test_clear_history_deletes_every_draft_before_removing_local_runs(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        first = self._published_run(store, "2026-07-10", "draft-1")
+        second = self._published_run(store, "2026-07-11", "draft-2")
+        deleted = []
+        cleaned = []
+        runner = DailyRun(store, None, None, cleanup=lambda article: cleaned.append(article["date"]))
+
+        summary = runner.clear_history(deleted.append)
+
+        self.assertEqual(summary, {"count": 2, "dates": ["2026-07-10", "2026-07-11"]})
+        self.assertEqual(deleted, ["draft-1", "draft-2"])
+        self.assertEqual(cleaned, ["2026-07-10", "2026-07-11"])
+        with self.assertRaises(KeyError):
+            store.get(first.id)
+        with self.assertRaises(KeyError):
+            store.get(second.id)
+
+    def test_clear_history_keeps_all_local_rows_when_draft_deletion_fails(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        first = self._published_run(store, "2026-07-10", "draft-1")
+        second = self._published_run(store, "2026-07-11", "draft-2")
+        deleted = []
+        runner = DailyRun(store, None, None)
+
+        def delete_draft(media_id):
+            deleted.append(media_id)
+            if media_id == "draft-2":
+                raise RuntimeError("draft deletion failed")
+
+        with self.assertRaisesRegex(RuntimeError, "draft deletion failed"):
+            runner.clear_history(delete_draft)
+
+        self.assertEqual(deleted, ["draft-1", "draft-2"])
+        self.assertEqual(store.get(first.id).media_id, "draft-1")
+        self.assertEqual(store.get(second.id).media_id, "draft-2")
+
+    def test_clear_history_refuses_while_a_run_is_active(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        active = store.claim("2026-07-10")
+        deleted = []
+
+        with self.assertRaisesRegex(RuntimeError, "active"):
+            DailyRun(store, None, None).clear_history(deleted.append)
+
+        self.assertEqual(deleted, [])
+        self.assertEqual(store.get(active.id).state, "queued")
+
+    @staticmethod
+    def _published_run(store, date, media_id):
+        run = store.claim(date)
+        store.transition(run.id, "scraping")
+        store.transition(run.id, "rewriting")
+        store.save_article(run.id, {"date": date, "markdown": "article", "items": []})
+        store.transition(run.id, "publishing")
+        return store.mark_published(run.id, media_id)
+
     def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         llm = self.valid_llm

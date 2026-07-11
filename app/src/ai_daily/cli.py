@@ -16,11 +16,21 @@ def serve_preview(app, flask_runner, waitress_runner=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("web", "daily"))
+    parser.add_argument("command", choices=("web", "daily", "cleanup-history"))
     parser.add_argument("--preview", action="store_true")
     args = parser.parse_args()
     app_dir = Path(__file__).parents[2]
     configure_logging(app_dir / "data" / "ai_daily.log")
+    if args.command == "cleanup-history":
+        if args.preview:
+            raise RuntimeError("cleanup-history requires formal mode")
+        runner = build_runner(app_dir, False)
+        delete_draft = getattr(runner.publisher, "delete_draft", None)
+        if not callable(delete_draft):
+            raise RuntimeError("cleanup-history requires draft deletion support")
+        summary = runner.clear_history(delete_draft)
+        print(f"清理完成：{summary['count']} 条记录，日期：{', '.join(summary['dates'])}")
+        return
     runner = build_runner(app_dir, args.preview)
     if args.command == "daily":
         from datetime import date
