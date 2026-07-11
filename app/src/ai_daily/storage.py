@@ -29,7 +29,11 @@ ALLOWED = {
     "publishing": {"published", "ready", "failed"},
     "published": set(),
     "failed": set(),
+    "cleaning": set(),
 }
+
+ACTIVE_STATES = {"queued", "scraping", "rewriting", "publishing"}
+REPLACEABLE_STATES = {"ready", "failed", "published"}
 
 
 class Store:
@@ -76,7 +80,7 @@ class Store:
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM daily_runs WHERE date=?", (date,)).fetchone()
-            if row and row["state"] not in {"ready", "failed", "published"}:
+            if row and row["state"] not in REPLACEABLE_STATES:
                 return self._run(row)
             if row:
                 db.execute("DELETE FROM run_events WHERE run_id=?", (row["id"],))
@@ -97,6 +101,26 @@ class Store:
         with closing(self._connect()) as db:
             rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
         return [self._run(row) for row in rows]
+
+    def begin_cleanup(self) -> list[Run]:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
+            if any(row["state"] in ACTIVE_STATES for row in rows):
+                raise RuntimeError("cannot clear history while active runs exist")
+            runs = [self._run(row) for row in rows]
+            if runs:
+                db.execute("UPDATE daily_runs SET state='cleaning', updated_at=CURRENT_TIMESTAMP")
+        return runs
+
+    def clear_media_receipt(self, run_id: str) -> None:
+        with closing(self._connect()) as db, db:
+            updated = db.execute(
+                "UPDATE daily_runs SET media_id='', updated_at=CURRENT_TIMESTAMP WHERE id=? AND state='cleaning'",
+                (run_id,),
+            )
+            if not updated.rowcount:
+                raise KeyError(run_id)
 
     def discard(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
@@ -159,7 +183,7 @@ class Store:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row:
                 raise KeyError(run_id)
-            if row["state"] not in {"queued", "scraping", "rewriting", "publishing"}:
+            if row["state"] not in ACTIVE_STATES:
                 return self._run(row)
             result = db.execute(
                 """UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP

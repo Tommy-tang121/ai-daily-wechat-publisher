@@ -32,13 +32,12 @@ class DailyRun:
         return self.settings()
 
     def clear_history(self, delete_draft):
-        runs = self.store.list_runs()
-        if any(run.state in {"queued", "scraping", "rewriting", "publishing"} for run in runs):
-            raise RuntimeError("cannot clear history while active runs exist")
+        runs = self.store.begin_cleanup()
 
         for run in runs:
             if run.media_id:
                 delete_draft(run.media_id)
+                self.store.clear_media_receipt(run.id)
 
         for run in runs:
             if self.cleanup and run.article:

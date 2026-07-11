@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from ai_daily.content import Content, ContentError
 from ai_daily.daily_run import DailyRun
-from ai_daily.storage import Store
+from ai_daily.storage import InvalidTransition, Store
 
 
 class WorkflowTests(unittest.TestCase):
@@ -195,7 +195,7 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             store.get(second.id)
 
-    def test_clear_history_keeps_all_local_rows_when_draft_deletion_fails(self):
+    def test_clear_history_resumes_after_a_partial_draft_deletion_failure(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         first = self._published_run(store, "2026-07-10", "draft-1")
         second = self._published_run(store, "2026-07-11", "draft-2")
@@ -211,8 +211,20 @@ class WorkflowTests(unittest.TestCase):
             runner.clear_history(delete_draft)
 
         self.assertEqual(deleted, ["draft-1", "draft-2"])
-        self.assertEqual(store.get(first.id).media_id, "draft-1")
+        self.assertEqual(store.get(first.id).state, "cleaning")
+        self.assertEqual(store.get(first.id).media_id, "")
+        self.assertEqual(store.get(second.id).state, "cleaning")
         self.assertEqual(store.get(second.id).media_id, "draft-2")
+
+        deleted = []
+        summary = runner.clear_history(deleted.append)
+
+        self.assertEqual(deleted, ["draft-2"])
+        self.assertEqual(summary, {"count": 2, "dates": ["2026-07-10", "2026-07-11"]})
+        with self.assertRaises(KeyError):
+            store.get(first.id)
+        with self.assertRaises(KeyError):
+            store.get(second.id)
 
     def test_clear_history_refuses_while_a_run_is_active(self):
         store = Store(Path(self.tmp.name) / "daily.db")
@@ -225,14 +237,49 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(deleted, [])
         self.assertEqual(store.get(active.id).state, "queued")
 
+    def test_clear_history_refuses_before_deleting_when_a_run_is_publishing(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        active = self._ready_run(store, "2026-07-10")
+        store.transition(active.id, "publishing")
+        self._published_run(store, "2026-07-11", "draft-1")
+        deleted = []
+
+        with self.assertRaisesRegex(RuntimeError, "active"):
+            DailyRun(store, None, None).clear_history(deleted.append)
+
+        self.assertEqual(deleted, [])
+        self.assertEqual(store.get(active.id).state, "publishing")
+
+    def test_clear_history_blocks_a_stale_ready_publish_before_remote_publish(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        ready = self._ready_run(store, "2026-07-10")
+        self._published_run(store, "2026-07-11", "draft-1")
+        remote_publishes = []
+        runner = DailyRun(store, None, lambda article: remote_publishes.append(article) or "new-draft")
+
+        def delete_draft(media_id):
+            self.assertEqual(media_id, "draft-1")
+            with self.assertRaises(InvalidTransition):
+                store.transition(ready.id, "publishing")
+            with self.assertRaises(InvalidTransition):
+                runner.publish(ready.date)
+
+        runner.clear_history(delete_draft)
+
+        self.assertEqual(remote_publishes, [])
+
     @staticmethod
     def _published_run(store, date, media_id):
+        run = WorkflowTests._ready_run(store, date)
+        store.transition(run.id, "publishing")
+        return store.mark_published(run.id, media_id)
+
+    @staticmethod
+    def _ready_run(store, date):
         run = store.claim(date)
         store.transition(run.id, "scraping")
         store.transition(run.id, "rewriting")
-        store.save_article(run.id, {"date": date, "markdown": "article", "items": []})
-        store.transition(run.id, "publishing")
-        return store.mark_published(run.id, media_id)
+        return store.save_article(run.id, {"date": date, "markdown": "article", "items": []})
 
     def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]

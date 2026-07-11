@@ -98,6 +98,19 @@ class StoreTests(unittest.TestCase):
                 self.assertEqual(claimed.id, active.id)
                 self.assertEqual(claimed.state, state)
 
+    def test_claim_fresh_keeps_a_cleaning_run_for_cleanup_retry(self):
+        run = self.store.claim("2026-07-29")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article"})
+        self.store.begin_cleanup()
+
+        claimed = self.store.claim_fresh("2026-07-29")
+
+        self.assertFalse(claimed.owner)
+        self.assertEqual(claimed.id, run.id)
+        self.assertEqual(claimed.state, "cleaning")
+
     def test_invalid_transition_is_rejected(self):
         run = self.store.claim("2026-07-10")
         with self.assertRaises(InvalidTransition):
