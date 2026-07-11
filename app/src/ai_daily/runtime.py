@@ -118,6 +118,16 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
         )
         return {"cover_path": str(path), "cover_url": f"/static/covers/{path.name}"}
 
+    covers_dir = (app_dir / "static" / "covers").resolve()
+
+    def cleanup(article: dict) -> None:
+        cover_path = article.get("cover_path")
+        if not cover_path:
+            return
+        path = Path(cover_path).resolve()
+        if path.is_relative_to(covers_dir) and path.is_file():
+            path.unlink()
+
     store = Store(app_dir / "data" / "ai_daily.db")
     store.initialize_settings(settings)
     return DailyRun(
@@ -126,4 +136,5 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
         publisher,
         cover=cover,
         settings=settings,
+        cleanup=cleanup,
     )

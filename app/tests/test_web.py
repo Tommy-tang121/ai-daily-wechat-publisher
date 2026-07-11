@@ -25,8 +25,10 @@ class FakeRunner:
         self.run = Run()
         self.executed = Event()
         self.values = {"title": "Daily", "max_words": 150}
+        self.start_calls = []
 
-    def start(self, date, settings, retry=False):
+    def start(self, date, settings, retry=False, fresh=False):
+        self.start_calls.append({"date": date, "retry": retry, "fresh": fresh})
         return self.run
 
     def execute(self, run_id, date, settings):
@@ -34,7 +36,7 @@ class FakeRunner:
         return self.run
 
     def publish(self, date):
-        self.run.state, self.run.media_id = "published", "draft-1"
+        self.run.state, self.run.media_id, self.run.article = "published", "draft-1", None
         return self.run
 
     def get(self, run_id):
@@ -52,7 +54,7 @@ class FakeRunner:
 
 
 class FailingRunner:
-    def start(self, date, settings, retry=False):
+    def start(self, date, settings, retry=False, fresh=False):
         raise RuntimeError("source unavailable")
 
 
@@ -99,6 +101,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.get_json()["id"], "run-1")
         self.assertEqual(response.get_json()["state"], "scraping")
+        self.assertTrue(runner.start_calls[0]["fresh"])
         self.assertTrue(runner.executed.wait(1))
 
     def test_read_returns_persisted_events_for_the_same_run(self):
@@ -161,4 +164,18 @@ class WebTests(unittest.TestCase):
     def test_publish_uses_the_same_persisted_run(self):
         client = create_app(FakeRunner()).test_client()
         response = client.post("/api/runs/run-1/publish", json={"date": "2026-07-10"})
-        self.assertEqual(response.get_json()["media_id"], "draft-1")
+        payload = response.get_json()
+        self.assertEqual(payload["state"], "published")
+        self.assertEqual(payload["media_id"], "draft-1")
+        self.assertIsNone(payload["article"])
+
+    def test_browser_clears_local_content_after_a_published_empty_response(self):
+        script = create_app(FakeRunner()).test_client().get("/static/app.js").data
+
+        self.assertIn(b'run.state === "published" && !run.article', script)
+        self.assertIn(b'stopPolling();\n      state.run = null;', script)
+        self.assertIn(b'localStorage.removeItem("ai-daily-run-id");', script)
+        self.assertIn(b'renderArticle(null);', script)
+        self.assertIn(b'renderCover(null);', script)
+        self.assertIn(b'$("btnFetch").disabled = false;', script)
+        self.assertIn("微信草稿已创建，本地内容已清理".encode(), script)

@@ -169,6 +169,21 @@
   }
 
   function renderRun(run) {
+    if (run.state === "published" && !run.article) {
+      stopPolling();
+      state.run = null;
+      state.runId = "";
+      localStorage.removeItem("ai-daily-run-id");
+      renderArticle(null);
+      renderCover(null);
+      $("btnFetch").disabled = false;
+      $("btnPublish").disabled = true;
+      $("cornerTag").classList.remove("show");
+      $("cornerBadge").textContent = "DONE";
+      $("fetchHint").textContent = "微信草稿已创建，本地内容已清理";
+      setStatus("done", "微信草稿已创建，本地内容已清理", `草稿回执：${run.media_id || "已记录"}`);
+      return;
+    }
     state.run = run;
     state.runId = run.id || state.runId;
     if (run.id) localStorage.setItem("ai-daily-run-id", run.id);

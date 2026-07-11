@@ -36,6 +36,24 @@ class RuntimeTests(unittest.TestCase):
             app_dir.mkdir()
             self.assertTrue(callable(build_runner(app_dir, preview_only=True).cover))
 
+    def test_runtime_cleanup_deletes_only_an_existing_cover_in_static_covers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            covers = app_dir / "static" / "covers"
+            covers.mkdir(parents=True)
+            inside = covers / "inside.png"
+            outside = app_dir / "outside.png"
+            inside.write_text("inside", encoding="utf-8")
+            outside.write_text("outside", encoding="utf-8")
+
+            cleanup = build_runner(app_dir, preview_only=True).cleanup
+            cleanup({"cover_path": str(inside)})
+            cleanup({"cover_path": str(outside)})
+            cleanup({"cover_path": str(covers / "missing.png")})
+
+            self.assertFalse(inside.exists())
+            self.assertTrue(outside.exists())
+
     def test_formal_runner_uses_the_wechat_publisher_directly(self):
         with tempfile.TemporaryDirectory() as directory:
             app_dir = Path(directory) / "app"

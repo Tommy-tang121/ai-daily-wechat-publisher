@@ -94,7 +94,7 @@ def create_app(runner, settings=None, tasks=None):
             return jsonify(error="请选择日期"), 400
         try:
             run_settings = current_settings()
-            run = runner.start(date, run_settings, retry=bool(body.get("retry")))
+            run = runner.start(date, run_settings, retry=bool(body.get("retry")), fresh=True)
         except Exception as exc:
             return jsonify(error=str(exc)), 502
         if getattr(run, "owner", False):
