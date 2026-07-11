@@ -1,4 +1,5 @@
 import sys
+import json
 import tempfile
 import threading
 import time
@@ -18,9 +19,21 @@ class WorkflowTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
+    @staticmethod
+    def valid_llm(messages):
+        payload = json.loads(messages[1]["content"])
+        if "sources" in payload:
+            items = ",".join('{"title":"R","body":"rewritten"}' for _ in payload["sources"])
+            return '{"items":[' + items + ']}'
+        return '{"opening":"今日观察","closing":"小编短评"}'
+
     def test_content_keeps_source_url_and_rejects_bad_result(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        good = lambda messages: '{"items":[{"title":"R","body":"rewritten","link":"https://wrong"}]}'
+        def good(messages):
+            payload = json.loads(messages[1]["content"])
+            if "sources" in payload:
+                return '{"items":[{"title":"R","body":"rewritten","link":"https://wrong"}]}'
+            return '{"opening":"今日观察","closing":"小编短评"}'
         article = Content(source, good).build("2026-07-10", {"max_words": 150})
         self.assertEqual(article["items"][0]["source_url"], "https://origin/a")
         with self.assertRaises(ContentError):
@@ -29,7 +42,7 @@ class WorkflowTests(unittest.TestCase):
     def test_content_accepts_legacy_rewritten_json_inside_a_code_block(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         raw = '```json\n{"items":[{"title":"R","rewritten":"rewritten"}]}\n```'
-        article = Content(source, lambda messages: raw).build("2026-07-10", {})
+        article = Content(source, lambda messages: raw if "sources" in json.loads(messages[1]["content"]) else '{"opening":"今日观察","closing":"小编短评"}').build("2026-07-10", {})
         self.assertEqual(article["items"][0]["body"], "rewritten")
 
     def test_content_rewrites_all_items_in_safe_batches(self):
@@ -37,7 +50,10 @@ class WorkflowTests(unittest.TestCase):
         calls = []
         barrier = threading.Barrier(3)
         def llm(messages):
-            batch = __import__("json").loads(messages[1]["content"])["sources"]
+            payload = json.loads(messages[1]["content"])
+            if "items" in payload:
+                return '{"opening":"今日观察","closing":"小编短评"}'
+            batch = payload["sources"]
             barrier.wait(timeout=1)
             calls.append(len(batch))
             return '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in batch) + ']}'
@@ -45,9 +61,32 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(article["items"]), 25)
         self.assertEqual(sorted(calls), [5, 10, 10])
 
+    def test_content_adds_editorial_sections_after_all_batches_finish(self):
+        source = lambda date: [
+            {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "行业动态"}
+            for index in range(11)
+        ]
+
+        def llm(messages):
+            payload = json.loads(messages[1]["content"])
+            if "sources" in payload:
+                items = ",".join('{"title":"R","body":"正文"}' for _ in payload["sources"])
+                return '{"items":[' + items + ']}'
+            self.assertEqual(len(payload["items"]), 11)
+            return '{"opening":"覆盖全天的观察","closing":"覆盖全天的短评"}'
+
+        article = Content(source, llm).build("2026-07-10", {"batch_size": 10})
+
+        self.assertEqual(len(article["items"]), 11)
+        self.assertEqual(article["opening"], "覆盖全天的观察")
+        self.assertEqual(article["closing"], "覆盖全天的短评")
+        self.assertIn("**今日观察**", article["markdown"])
+        self.assertIn("**小编短评**", article["markdown"])
+        self.assertIn("数据来源：https://aihot.virxact.com/", article["markdown"])
+
     def test_content_reports_scraping_and_each_finished_rewrite_batch(self):
         source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(11)]
-        llm = lambda messages: '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in __import__("json").loads(messages[1]["content"])["sources"]) + ']}'
+        llm = self.valid_llm
         progress = []
         Content(source, llm).build("2026-07-10", {"batch_size": 10}, progress=lambda *event: progress.append(event))
         self.assertEqual(progress[0][:2], ("scraping", "progress"))
@@ -68,7 +107,10 @@ class WorkflowTests(unittest.TestCase):
             time.sleep(0.05)
             with lock:
                 active -= 1
-            count = len(__import__("json").loads(messages[1]["content"])["sources"])
+            payload = json.loads(messages[1]["content"])
+            if "items" in payload:
+                return '{"opening":"今日观察","closing":"小编短评"}'
+            count = len(payload["sources"])
             return '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in range(count)) + ']}'
 
         Content(source, llm).build("2026-07-09", {"batch_size": 10})
@@ -77,7 +119,7 @@ class WorkflowTests(unittest.TestCase):
     def test_publish_same_ready_run_calls_adapter_once(self):
         calls = []
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        llm = self.valid_llm
         publish = lambda article: calls.append(article) or "draft-1"
         runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), publish)
         runner.prepare("2026-07-10", {})
@@ -87,7 +129,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        llm = self.valid_llm
         runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), lambda article: (_ for _ in ()).throw(RuntimeError("publisher unavailable")))
         ready = runner.prepare("2026-07-10", {})
 
@@ -121,14 +163,14 @@ class WorkflowTests(unittest.TestCase):
         old = store.claim("2026-07-10")
         store.transition(old.id, "failed", "source error")
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        llm = self.valid_llm
         run = DailyRun(store, Content(source, llm), None).prepare("2026-07-10", {}, retry=True)
         self.assertEqual(run.state, "ready")
 
     def test_started_run_persists_progress_before_background_execution_finishes(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        llm = self.valid_llm
         runner = DailyRun(store, Content(source, llm), None)
         started = runner.start("2026-07-10", {})
         self.assertTrue(started.owner)
@@ -140,7 +182,7 @@ class WorkflowTests(unittest.TestCase):
     def test_ready_run_keeps_the_generated_cover_for_preview_and_publishing(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        llm = self.valid_llm
         cover = lambda article, settings: {"cover_path": "C:/covers/2026-07-10.png", "cover_url": "/static/covers/2026-07-10.png"}
         runner = DailyRun(store, Content(source, llm), None, cover=cover)
         ready = runner.prepare("2026-07-10", {"title": "Daily"})
@@ -149,7 +191,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_ready_run_persists_the_title_for_the_publisher(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        llm = self.valid_llm
         ready = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), None).prepare(
             "2026-07-10", {"title": "AI 行业热点新闻 | 2026-07-10"}
         )
@@ -169,7 +211,7 @@ class WorkflowTests(unittest.TestCase):
         with closing(store._connect()) as db, db:
             db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (old.id,))
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        llm = self.valid_llm
 
         run = DailyRun(store, Content(source, llm), None).prepare("2026-07-10", {}, retry=True)
 

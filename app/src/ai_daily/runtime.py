@@ -9,7 +9,13 @@ from .publishing import WeChatPublisher
 from .storage import Store
 
 
-DEFAULT_SETTINGS = {"title": "AI 行业热点新闻", "author": "", "max_words": 150, "schedule_time": "10:00"}
+DEFAULT_SETTINGS = {
+    "title": "AI 行业热点新闻",
+    "author": "",
+    "max_words": 150,
+    "schedule_time": "10:00",
+    "data_source": "https://aihot.virxact.com/",
+}
 
 
 def load_environment(app_dir: Path) -> None:
