@@ -116,16 +116,27 @@ class WorkflowTests(unittest.TestCase):
         Content(source, llm).build("2026-07-09", {"batch_size": 10})
         self.assertLessEqual(highest, 3)
 
-    def test_publish_same_ready_run_calls_adapter_once(self):
-        calls = []
+    def test_successful_publish_cleans_up_the_persisted_article(self):
+        publisher_calls = []
+        cleanup_calls = []
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         llm = self.valid_llm
-        publish = lambda article: calls.append(article) or "draft-1"
-        runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), publish)
-        runner.prepare("2026-07-10", {})
-        self.assertEqual(runner.publish("2026-07-10").media_id, "draft-1")
-        self.assertEqual(runner.publish("2026-07-10").media_id, "draft-1")
-        self.assertEqual(len(calls), 1)
+        publish = lambda article: publisher_calls.append(article.copy()) or "draft-1"
+        cleanup = lambda article: cleanup_calls.append(article.copy())
+        cover = lambda article, settings: {"cover_path": "C:/covers/2026-07-10.png"}
+        runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), publish, cover=cover, cleanup=cleanup)
+        ready = runner.prepare("2026-07-10", {})
+
+        published = runner.publish("2026-07-10")
+
+        self.assertEqual(len(publisher_calls), 1)
+        self.assertEqual(cleanup_calls, publisher_calls)
+        self.assertEqual(cleanup_calls[0]["cover_path"], "C:/covers/2026-07-10.png")
+        self.assertEqual(published.state, "published")
+        self.assertEqual(published.media_id, "draft-1")
+        self.assertIsNone(published.article)
+        with self.assertRaises(KeyError):
+            runner.get(ready.id)
 
     def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
@@ -166,6 +177,19 @@ class WorkflowTests(unittest.TestCase):
         llm = self.valid_llm
         run = DailyRun(store, Content(source, llm), None).prepare("2026-07-10", {}, retry=True)
         self.assertEqual(run.state, "ready")
+
+    def test_prepare_fresh_replaces_a_ready_run(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        runner = DailyRun(store, Content(source, self.valid_llm), None)
+        old = runner.prepare("2026-07-10", {})
+
+        fresh = runner.prepare("2026-07-10", {}, fresh=True)
+
+        self.assertNotEqual(fresh.id, old.id)
+        self.assertEqual(fresh.state, "ready")
+        with self.assertRaises(KeyError):
+            runner.get(old.id)
 
     def test_started_run_persists_progress_before_background_execution_finishes(self):
         store = Store(Path(self.tmp.name) / "daily.db")

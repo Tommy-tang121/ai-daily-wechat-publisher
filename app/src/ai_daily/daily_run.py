@@ -10,12 +10,13 @@ logger = logging.getLogger("ai_daily")
 class DailyRun:
     """The sole workflow interface for browser and scheduled execution."""
 
-    def __init__(self, store, content, publisher, cover=None, settings=None):
+    def __init__(self, store, content, publisher, cover=None, settings=None, cleanup=None):
         self.store = store
         self.content = content
         self.publisher = publisher
         self.cover = cover
         self.default_settings = settings or {}
+        self.cleanup = cleanup
 
     def get(self, run_id: str):
         return self.store.get(run_id)
@@ -30,12 +31,13 @@ class DailyRun:
         self.store.update_settings(values)
         return self.settings()
 
-    def start(self, date: str, settings: dict, retry: bool = False):
-        run = self.store.claim(date)
-        if retry and run.state == "failed":
-            run = self.store.retry(run.id)
-        elif retry:
-            run = self.store.reclaim_stale(run.id, minutes=30)
+    def start(self, date: str, settings: dict, retry: bool = False, fresh: bool = False):
+        run = self.store.claim_fresh(date) if fresh else self.store.claim(date)
+        if not fresh:
+            if retry and run.state == "failed":
+                run = self.store.retry(run.id)
+            elif retry:
+                run = self.store.reclaim_stale(run.id, minutes=30)
         if not run.owner:
             return run
         logger.info("run=%s stage=scraping", run.id)
@@ -76,8 +78,8 @@ class DailyRun:
             logger.error("run=%s stage=failed error=%s", run_id, type(exc).__name__)
             raise
 
-    def prepare(self, date: str, settings: dict, retry: bool = False):
-        run = self.start(date, settings, retry=retry)
+    def prepare(self, date: str, settings: dict, retry: bool = False, fresh: bool = False):
+        run = self.start(date, settings, retry=retry, fresh=fresh)
         if not run.owner:
             return run
         return self.execute(run.id, date, settings)
@@ -94,10 +96,13 @@ class DailyRun:
             article = {**run.article, "title": run.article.get("title", f"AI 行业热点新闻 | {run.date}")}
             media_id = self.publisher(article)
             published = self.store.mark_published(run.id, media_id)
-            logger.info("run=%s stage=published", run.id)
-            return published
         except Exception as exc:
             self.store.transition(run.id, "ready", str(exc))
             self.store.record_event(run.id, "error", "error", str(exc))
             logger.error("run=%s stage=failed error=%s", run.id, type(exc).__name__)
             raise
+        if self.cleanup:
+            self.cleanup(article)
+        self.store.discard(run.id)
+        logger.info("run=%s stage=published", run.id)
+        return replace(published, article=None)

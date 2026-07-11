@@ -72,12 +72,37 @@ class Store:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             return self._run(row, owner=True)
 
+    def claim_fresh(self, date: str) -> Run:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM daily_runs WHERE date=?", (date,)).fetchone()
+            if row and row["state"] not in {"ready", "failed", "published"}:
+                return self._run(row)
+            if row:
+                db.execute("DELETE FROM run_events WHERE run_id=?", (row["id"],))
+                db.execute("DELETE FROM daily_runs WHERE id=?", (row["id"],))
+            run_id = uuid.uuid4().hex
+            db.execute("INSERT INTO daily_runs(id, date, state) VALUES (?, ?, 'queued')", (run_id, date))
+            row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            return self._run(row, owner=True)
+
     def get(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             raise KeyError(run_id)
         return self._run(row)
+
+    def discard(self, run_id: str) -> Run:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
+                raise KeyError(run_id)
+            discarded = self._run(row)
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM daily_runs WHERE id=?", (run_id,))
+            return discarded
 
     def transition(self, run_id: str, target: str, error: str = "") -> Run:
         with closing(self._connect()) as db, db:

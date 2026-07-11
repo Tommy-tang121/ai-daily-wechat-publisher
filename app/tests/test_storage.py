@@ -31,6 +31,73 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(repeated.media_id, "media-1")
         self.assertFalse(repeated.owner)
 
+    def test_discard_returns_the_saved_run_and_removes_its_events(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article"})
+        self.store.record_event(run.id, "done", "complete", "Ready to publish")
+
+        discarded = self.store.discard(run.id)
+
+        self.assertEqual(discarded.id, run.id)
+        self.assertEqual(discarded.state, "ready")
+        self.assertEqual(discarded.article, {"markdown": "article"})
+        with self.assertRaises(KeyError):
+            self.store.get(run.id)
+        with closing(self.store._connect()) as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM daily_runs WHERE id=?", (run.id,)).fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (run.id,)).fetchone())
+
+    def test_claim_fresh_replaces_ready_failed_and_published_runs(self):
+        for state in ("ready", "failed", "published"):
+            with self.subTest(state=state):
+                date = f"2026-07-{11 + len(state)}"
+                old = self.store.claim(date)
+                self.store.record_event(old.id, "scraping", "progress", "Old run")
+                if state == "ready":
+                    self.store.transition(old.id, "scraping")
+                    self.store.transition(old.id, "rewriting")
+                    self.store.save_article(old.id, {"markdown": "article"})
+                elif state == "failed":
+                    self.store.transition(old.id, "failed", "source unavailable")
+                else:
+                    self.store.transition(old.id, "scraping")
+                    self.store.transition(old.id, "rewriting")
+                    self.store.save_article(old.id, {"markdown": "article"})
+                    self.store.transition(old.id, "publishing")
+                    self.store.mark_published(old.id, "media-1")
+
+                fresh = self.store.claim_fresh(date)
+
+                self.assertTrue(fresh.owner)
+                self.assertNotEqual(fresh.id, old.id)
+                self.assertEqual(fresh.state, "queued")
+                self.assertIsNone(fresh.article)
+                with self.assertRaises(KeyError):
+                    self.store.get(old.id)
+                with closing(self.store._connect()) as db:
+                    self.assertIsNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (old.id,)).fetchone())
+
+    def test_claim_fresh_keeps_active_runs(self):
+        for state in ("queued", "scraping", "rewriting", "publishing"):
+            with self.subTest(state=state):
+                date = f"2026-07-{20 + len(state)}"
+                active = self.store.claim(date)
+                if state in {"scraping", "rewriting", "publishing"}:
+                    self.store.transition(active.id, "scraping")
+                if state in {"rewriting", "publishing"}:
+                    self.store.transition(active.id, "rewriting")
+                if state == "publishing":
+                    self.store.save_article(active.id, {"markdown": "article"})
+                    self.store.transition(active.id, "publishing")
+
+                claimed = self.store.claim_fresh(date)
+
+                self.assertFalse(claimed.owner)
+                self.assertEqual(claimed.id, active.id)
+                self.assertEqual(claimed.state, state)
+
     def test_invalid_transition_is_rejected(self):
         run = self.store.claim("2026-07-10")
         with self.assertRaises(InvalidTransition):
