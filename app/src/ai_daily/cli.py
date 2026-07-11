@@ -24,7 +24,10 @@ def main():
     runner = build_runner(app_dir, args.preview)
     if args.command == "daily":
         from datetime import date
-        run = runner.prepare(date.today().isoformat(), {}, retry=True)
+        run_date = date.today().isoformat()
+        settings = runner.settings()
+        settings["title"] = f"AI 行业热点新闻 | {run_date}"
+        run = runner.prepare(run_date, settings, retry=True)
         if not args.preview:
             runner.publish(run.date)
         return

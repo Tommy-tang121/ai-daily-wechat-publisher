@@ -26,7 +26,7 @@ ALLOWED = {
     "scraping": {"rewriting", "failed"},
     "rewriting": {"ready", "failed"},
     "ready": {"publishing", "failed"},
-    "publishing": {"published", "failed"},
+    "publishing": {"published", "ready", "failed"},
     "published": set(),
     "failed": set(),
 }
@@ -115,12 +115,13 @@ class Store:
 
     def retry(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
-            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row or row["state"] != "failed":
                 raise InvalidTransition("only failed runs can be retried")
-            db.execute("UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (run_id,))
+            state = "ready" if row["article"] else "queued"
+            db.execute("UPDATE daily_runs SET state=?, error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (state, run_id))
         run = self.get(run_id)
-        return Run(run.id, run.date, run.state, True, run.media_id, run.article, run.error)
+        return Run(run.id, run.date, run.state, state == "queued", run.media_id, run.article, run.error)
 
     def reclaim_stale(self, run_id: str, minutes: int) -> Run:
         age = f"-{minutes} minutes"
@@ -128,7 +129,7 @@ class Store:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row:
                 raise KeyError(run_id)
-            if row["state"] not in {"scraping", "rewriting", "publishing"}:
+            if row["state"] not in {"queued", "scraping", "rewriting", "publishing"}:
                 return self._run(row)
             result = db.execute(
                 """UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP

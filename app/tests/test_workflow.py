@@ -85,6 +85,32 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(runner.publish("2026-07-10").media_id, "draft-1")
         self.assertEqual(len(calls), 1)
 
+    def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), lambda article: (_ for _ in ()).throw(RuntimeError("publisher unavailable")))
+        ready = runner.prepare("2026-07-10", {})
+
+        with self.assertRaisesRegex(RuntimeError, "publisher unavailable"):
+            runner.publish("2026-07-10")
+
+        retriable = runner.get(ready.id)
+        self.assertEqual(retriable.state, "ready")
+        self.assertEqual(retriable.article["items"][0]["title"], "R")
+
+    def test_publish_adds_a_date_title_to_a_legacy_ready_article(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        run = store.claim("2026-07-10")
+        store.transition(run.id, "scraping")
+        store.transition(run.id, "rewriting")
+        store.save_article(run.id, {"date": "2026-07-10", "markdown": "article", "items": []})
+        captured = {}
+
+        published = DailyRun(store, None, lambda article: captured.update(article) or "draft-1").publish("2026-07-10")
+
+        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(captured.get("title"), "AI 行业热点新闻 | 2026-07-10")
+
     def test_get_reads_the_persisted_run(self):
         runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), None, None)
         run = runner.store.claim("2026-07-10")
@@ -120,6 +146,15 @@ class WorkflowTests(unittest.TestCase):
         ready = runner.prepare("2026-07-10", {"title": "Daily"})
         self.assertEqual(ready.article["cover_url"], "/static/covers/2026-07-10.png")
         self.assertEqual(runner.events(ready.id)[-2]["stage"], "cover")
+
+    def test_ready_run_persists_the_title_for_the_publisher(self):
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        llm = lambda messages: '{"items":[{"title":"R","body":"rewritten"}]}'
+        ready = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), None).prepare(
+            "2026-07-10", {"title": "AI 行业热点新闻 | 2026-07-10"}
+        )
+
+        self.assertEqual(ready.article.get("title"), "AI 行业热点新闻 | 2026-07-10")
 
     def test_runner_exposes_persisted_settings_to_web_and_scheduled_callers(self):
         store = Store(Path(self.tmp.name) / "daily.db")

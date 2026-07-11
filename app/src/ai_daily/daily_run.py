@@ -58,6 +58,7 @@ class DailyRun:
 
         try:
             article = self.content.build(date, settings, progress=progress)
+            article["title"] = settings.get("title", f"AI 行业热点新闻 | {date}")
             self.store.record_event(run_id, "formatting", "complete", "文章排版完成")
             if self.cover:
                 self.store.record_event(run_id, "cover", "progress", "正在生成封面")
@@ -90,11 +91,13 @@ class DailyRun:
         self.store.transition(run.id, "publishing")
         logger.info("run=%s stage=publishing", run.id)
         try:
-            media_id = self.publisher(run.article)
+            article = {**run.article, "title": run.article.get("title", f"AI 行业热点新闻 | {run.date}")}
+            media_id = self.publisher(article)
             published = self.store.mark_published(run.id, media_id)
             logger.info("run=%s stage=published", run.id)
             return published
         except Exception as exc:
-            self.store.transition(run.id, "failed", str(exc))
+            self.store.transition(run.id, "ready", str(exc))
+            self.store.record_event(run.id, "error", "error", str(exc))
             logger.error("run=%s stage=failed error=%s", run.id, type(exc).__name__)
             raise

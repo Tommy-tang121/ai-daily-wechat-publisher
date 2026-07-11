@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -39,8 +40,12 @@ class CliTests(unittest.TestCase):
         captured = {}
 
         class Runner:
+            def settings(self):
+                return {"title": "stale title", "max_words": 150}
+
             def prepare(self, date_value, settings, retry=False):
                 captured["retry"] = retry
+                captured["settings"] = settings
                 return type("Run", (), {"date": date_value})()
 
         with (
@@ -50,3 +55,4 @@ class CliTests(unittest.TestCase):
             cli.main()
 
         self.assertTrue(captured["retry"])
+        self.assertEqual(captured["settings"].get("title"), f"AI 行业热点新闻 | {date.today().isoformat()}")

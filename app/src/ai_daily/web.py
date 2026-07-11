@@ -33,8 +33,10 @@ def create_app(runner, settings=None, tasks=None):
 
     @app.get("/")
     def index():
+        script_version = (app_dir / "static" / "app.js").stat().st_mtime_ns
+        page = (app_dir / "templates" / "index.html").read_text(encoding="utf-8")
         return app.response_class(
-            (app_dir / "templates" / "index.html").read_text(encoding="utf-8"),
+            page.replace("/static/app.js", f"/static/app.js?v={script_version}"),
             mimetype="text/html",
         )
 

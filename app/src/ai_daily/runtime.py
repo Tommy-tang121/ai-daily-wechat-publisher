@@ -98,11 +98,10 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
     if legacy.is_file():
         legacy_values = json.loads(legacy.read_text(encoding="utf-8"))
         settings.update({key: legacy_values[key] for key in settings if key in legacy_values})
-    publisher = (
-        lambda article: (_ for _ in ()).throw(RuntimeError("预览模式禁止创建微信草稿"))
-        if preview_only
-        else WeChatPublisher(settings["title"], author=settings["author"])
-    )
+    if preview_only:
+        publisher = lambda article: (_ for _ in ()).throw(RuntimeError("预览模式禁止创建微信草稿"))
+    else:
+        publisher = WeChatPublisher(settings["title"], author=settings["author"])
 
     def cover(article: dict, values: dict) -> dict:
         path = generate_cover(

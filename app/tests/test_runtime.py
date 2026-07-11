@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from ai_daily.runtime import OpenAiCompatibleLlm, build_runner, load_environment
+from ai_daily.publishing import WeChatPublisher
 
 
 class RuntimeTests(unittest.TestCase):
@@ -34,6 +35,13 @@ class RuntimeTests(unittest.TestCase):
             app_dir = Path(directory) / "app"
             app_dir.mkdir()
             self.assertTrue(callable(build_runner(app_dir, preview_only=True).cover))
+
+    def test_formal_runner_uses_the_wechat_publisher_directly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            app_dir.mkdir()
+
+            self.assertIsInstance(build_runner(app_dir).publisher, WeChatPublisher)
 
     def test_legacy_config_migration_keeps_only_known_non_secret_settings(self):
         with tempfile.TemporaryDirectory() as directory:

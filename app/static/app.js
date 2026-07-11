@@ -232,7 +232,14 @@
     const runId = localStorage.getItem("ai-daily-run-id");
     if (!runId) return;
     state.runId = runId;
-    await pollRun();
+    const run = await requestJson(`/api/runs/${encodeURIComponent(runId)}`);
+    state.selectedDate = run.date;
+    const restored = new Date(`${run.date}T00:00:00`);
+    renderCalendar(restored.getFullYear(), restored.getMonth());
+    renderRun(run);
+    if (["queued", "scraping", "rewriting", "publishing"].includes(run.state)) {
+      state.timer = window.setTimeout(pollRun, 1000);
+    }
   }
 
   async function saveSettings(values) {

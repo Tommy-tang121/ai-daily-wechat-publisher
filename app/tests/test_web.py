@@ -88,6 +88,11 @@ class WebTests(unittest.TestCase):
         self.assertNotIn(b"fonts.googleapis.com", page)
         self.assertFalse(any(item.category is ResourceWarning for item in caught))
 
+    def test_home_page_versions_the_browser_script(self):
+        page = create_app(FakeRunner()).test_client().get("/").data
+
+        self.assertIn(b'/static/app.js?v=', page)
+
     def test_prepare_starts_a_background_run_and_returns_its_persisted_id(self):
         runner = FakeRunner()
         response = create_app(runner).test_client().post("/api/runs", json={"date": "2026-07-10"})
@@ -133,6 +138,12 @@ class WebTests(unittest.TestCase):
 
         self.assertIn(b"loadScheduleStatus", script)
         self.assertIn(b"configured === false", script)
+
+    def test_browser_syncs_the_calendar_to_the_restored_run_date(self):
+        script = create_app(FakeRunner()).test_client().get("/static/app.js").data
+
+        self.assertIn(b"state.selectedDate = run.date;", script)
+        self.assertIn(b"renderCalendar(restored.getFullYear(), restored.getMonth());", script)
 
     def test_browser_script_uses_persisted_runs_instead_of_legacy_pipeline_endpoints(self):
         with warnings.catch_warnings(record=True) as caught:

@@ -43,6 +43,20 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(retried.state, "queued")
         self.assertTrue(retried.owner)
 
+    def test_failed_publish_with_an_article_retries_from_ready_without_regenerating(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article"})
+        self.store.transition(run.id, "publishing")
+        self.store.transition(run.id, "failed", "publisher unavailable")
+
+        retried = self.store.retry(run.id)
+
+        self.assertEqual(retried.state, "ready")
+        self.assertFalse(retried.owner)
+        self.assertEqual(retried.article, {"markdown": "article"})
+
     def test_events_are_persisted_in_the_order_they_happened(self):
         run = self.store.claim("2026-07-10")
         self.store.record_event(run.id, "scraping", "progress", "Fetching sources")
@@ -64,6 +78,16 @@ class StoreTests(unittest.TestCase):
     def test_stale_active_run_can_be_safely_reclaimed_for_retry(self):
         run = self.store.claim("2026-07-10")
         self.store.transition(run.id, "scraping")
+        with closing(self.store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+
+        reclaimed = self.store.reclaim_stale(run.id, minutes=30)
+
+        self.assertTrue(reclaimed.owner)
+        self.assertEqual(reclaimed.state, "queued")
+
+    def test_stale_queued_run_can_be_safely_reclaimed_for_retry(self):
+        run = self.store.claim("2026-07-10")
         with closing(self.store._connect()) as db, db:
             db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
 
