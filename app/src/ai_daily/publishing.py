@@ -11,7 +11,7 @@ VENDOR_SCRIPTS = Path(__file__).parents[2] / "vendor" / "baoyu-post-to-wechat" /
 
 
 def build_wechat_command(bun: str, article: Path, title: str, cover: str, author: str) -> list[str]:
-    command = [bun, "run", "wechat-api.ts", str(article), "--theme", "default"]
+    command = [bun, "run", "wechat-api.ts", str(article), "--no-cite", "--theme", "default"]
     if title: command += ["--title", title]
     if cover: command += ["--cover", cover]
     if author: command += ["--author", author]

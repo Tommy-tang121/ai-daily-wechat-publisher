@@ -10,9 +10,9 @@ from ai_daily.publishing import WeChatPublisher, build_wechat_command
 
 
 class PublishingTests(unittest.TestCase):
-    def test_command_keeps_default_citations(self):
+    def test_command_disables_automatic_link_citations(self):
         command = build_wechat_command("bun", Path("article.md"), "title", "cover.png", "author")
-        self.assertNotIn("--no-cite", command)
+        self.assertIn("--no-cite", command)
         self.assertIn("--theme", command)
 
     def test_publisher_reuses_the_cover_persisted_with_the_ready_run(self):
