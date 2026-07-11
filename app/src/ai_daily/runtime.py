@@ -114,6 +114,7 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
             app_dir / "static" / "covers",
             article["date"],
             values.get("title", settings["title"]),
+            values.get("author", settings["author"]),
         )
         return {"cover_path": str(path), "cover_url": f"/static/covers/{path.name}"}
 

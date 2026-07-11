@@ -16,3 +16,12 @@ class CoverTests(unittest.TestCase):
             from PIL import Image
             with Image.open(cover) as image:
                 self.assertEqual(image.size, (900, 500))
+
+    def test_cover_matches_the_legacy_hand_drawn_reference(self):
+        from PIL import Image, ImageChops
+
+        with tempfile.TemporaryDirectory() as directory:
+            cover = generate_cover(Path(directory), "2026-07-02", "ignored", "Tommy")
+            reference = Path(__file__).parents[1] / "static" / "covers" / "2026-07-02.png"
+            with Image.open(cover).convert("RGB") as actual, Image.open(reference).convert("RGB") as expected:
+                self.assertIsNone(ImageChops.difference(actual, expected).getbbox())
