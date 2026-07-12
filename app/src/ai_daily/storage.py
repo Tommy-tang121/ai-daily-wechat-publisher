@@ -140,8 +140,10 @@ class Store:
                 raise KeyError(run_id)
             if target not in ALLOWED.get(row["state"], set()):
                 raise InvalidTransition(f"{row['state']} -> {target}")
-            db.execute("UPDATE daily_runs SET state=?, error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                       (target, error[:500], run_id))
+            updated = db.execute("UPDATE daily_runs SET state=?, error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND state=?",
+                                 (target, error[:500], run_id, row["state"]))
+            if not updated.rowcount:
+                raise InvalidTransition(f"{row['state']} -> {target}")
         return self.get(run_id)
 
     def save_article(self, run_id: str, article: dict) -> Run:

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
@@ -115,6 +116,41 @@ class StoreTests(unittest.TestCase):
         run = self.store.claim("2026-07-10")
         with self.assertRaises(InvalidTransition):
             self.store.transition(run.id, "published")
+
+    def test_transition_does_not_overwrite_a_cleaning_state_changed_after_its_read(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article"})
+        original_connect = self.store._connect
+
+        class InterleavingConnection:
+            def __init__(self, connection):
+                self.connection = connection
+                self.changed_state = False
+
+            def __enter__(self):
+                self.connection.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.connection.__exit__(*args)
+
+            def close(self):
+                self.connection.close()
+
+            def execute(self, sql, parameters=()):
+                if sql.startswith("UPDATE daily_runs SET state=?, error=?") and not self.changed_state:
+                    self.changed_state = True
+                    with closing(original_connect()) as concurrent, concurrent:
+                        concurrent.execute("UPDATE daily_runs SET state='cleaning' WHERE id=?", (run.id,))
+                return self.connection.execute(sql, parameters)
+
+        with patch.object(self.store, "_connect", side_effect=lambda: InterleavingConnection(original_connect())):
+            with self.assertRaisesRegex(InvalidTransition, "ready -> publishing"):
+                self.store.transition(run.id, "publishing")
+
+        self.assertEqual(self.store.get(run.id).state, "cleaning")
 
     def test_failed_run_can_be_explicitly_retried(self):
         run = self.store.claim("2026-07-10")
