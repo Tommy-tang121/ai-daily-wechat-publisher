@@ -1,13 +1,17 @@
 import sys
+import tempfile
 import unittest
 import warnings
 import gc
+from contextlib import closing
 from pathlib import Path
 from threading import Event
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from ai_daily.web import create_app
+from ai_daily.daily_run import DailyRun
+from ai_daily.storage import Store
 
 
 class Run:
@@ -138,6 +142,33 @@ class WebTests(unittest.TestCase):
         response = create_app(FakeRunner()).test_client().get("/api/runs/run-1")
         self.assertEqual(response.get_json()["events"][0]["stage"], "scraping")
 
+    def test_read_reconciles_a_stale_publish_without_returning_its_article(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp) / "daily.db")
+            run = store.claim("2026-07-10")
+            store.transition(run.id, "scraping")
+            store.transition(run.id, "rewriting")
+            store.save_article(
+                run.id,
+                {"date": run.date, "markdown": "article", "cover_path": "C:/covers/2026-07-10.png"},
+            )
+            store.record_event(run.id, "done", "complete", "ready")
+            store.transition(run.id, "publishing")
+            with closing(store._connect()) as db, db:
+                db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+            cleaned = []
+            runner = DailyRun(store, None, None, cleanup=lambda article: cleaned.append(article["cover_path"]))
+
+            response = create_app(runner).test_client().get(f"/api/runs/{run.id}")
+
+        payload = response.get_json()
+        self.assertEqual(payload["state"], "publication_uncertain")
+        self.assertIsNone(payload["article"])
+        self.assertEqual(payload["media_id"], "")
+        self.assertEqual(payload["events"], [])
+        self.assertNotIn("cover_path", payload)
+        self.assertEqual(cleaned, ["C:/covers/2026-07-10.png"])
+
     def test_settings_api_reads_and_saves_the_same_runner_settings(self):
         client = create_app(FakeRunner()).test_client()
         self.assertEqual(client.get("/api/config").get_json()["max_words"], 150)
@@ -227,3 +258,4 @@ class WebTests(unittest.TestCase):
         self.assertIn("发布结果待确认".encode(), script)
         self.assertIn(b"window.confirm(", script)
         self.assertIn(b"resolve_uncertain: resolveUncertain", script)
+        self.assertIn("toast(\"发布结果待确认，请先在微信草稿箱核对\", \"error\")".encode(), script)

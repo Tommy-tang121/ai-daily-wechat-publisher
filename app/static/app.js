@@ -397,7 +397,11 @@
         body: JSON.stringify({ date: state.selectedDate }),
       });
       renderRun(run);
-      toast("微信草稿已创建", "success");
+      if (run.state === "publication_uncertain") {
+        toast("发布结果待确认，请先在微信草稿箱核对", "error");
+      } else {
+        toast("微信草稿已创建", "success");
+      }
     } catch (error) {
       $("btnPublish").disabled = false;
       toast(`创建草稿失败：${error.message}`, "error");

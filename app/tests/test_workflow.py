@@ -510,18 +510,59 @@ class WorkflowTests(unittest.TestCase):
         store.transition(run.id, "rewriting")
         return store.save_article(run.id, {"date": date, "markdown": "article", "items": []})
 
-    def test_publish_error_keeps_the_generated_article_ready_for_a_safe_retry(self):
+    def test_publish_error_becomes_uncertain_and_never_retries_the_remote_call(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         llm = self.valid_llm
-        runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), lambda article: (_ for _ in ()).throw(RuntimeError("publisher unavailable")))
+        calls = []
+
+        def publisher(article):
+            calls.append(article)
+            raise RuntimeError("publisher unavailable")
+
+        runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, llm), publisher)
         ready = runner.prepare("2026-07-10", {})
 
-        with self.assertRaisesRegex(RuntimeError, "publisher unavailable"):
-            runner.publish("2026-07-10")
+        uncertain = runner.publish("2026-07-10")
+        repeated = runner.publish("2026-07-10")
 
-        retriable = runner.get(ready.id)
-        self.assertEqual(retriable.state, "ready")
-        self.assertEqual(retriable.article["items"][0]["title"], "R")
+        self.assertEqual(uncertain.state, "publication_uncertain")
+        self.assertEqual(repeated.state, "publication_uncertain")
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(uncertain.article)
+        self.assertEqual(uncertain.media_id, "")
+        self.assertEqual(runner.events(ready.id), [])
+
+    def test_uncertain_publish_keeps_only_a_retryable_cover_cleanup_marker(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        run = store.claim("2026-07-10")
+        store.transition(run.id, "scraping")
+        store.transition(run.id, "rewriting")
+        ready = store.save_article(
+            run.id,
+            {"date": run.date, "markdown": "article", "cover_path": "C:/covers/2026-07-10.png"},
+        )
+        cleanup_calls = []
+
+        def cleanup(article):
+            cleanup_calls.append(article["cover_path"])
+            if len(cleanup_calls) == 1:
+                raise RuntimeError("cover locked")
+
+        runner = DailyRun(
+            store,
+            None,
+            lambda article: (_ for _ in ()).throw(RuntimeError("publisher timeout")),
+            cleanup=cleanup,
+        )
+
+        uncertain = runner.publish(ready.date)
+        recovered = runner.get(ready.id)
+
+        self.assertEqual(uncertain.state, "publication_uncertain")
+        self.assertIsNone(uncertain.article)
+        self.assertEqual(cleanup_calls, ["C:/covers/2026-07-10.png", "C:/covers/2026-07-10.png"])
+        self.assertEqual(recovered.state, "publication_uncertain")
+        self.assertIsNone(store.pending_cover_cleanup(ready.id))
 
     def test_publish_adds_a_date_title_to_a_legacy_ready_article(self):
         store = Store(Path(self.tmp.name) / "daily.db")

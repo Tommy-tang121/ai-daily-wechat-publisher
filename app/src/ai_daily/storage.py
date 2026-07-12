@@ -62,6 +62,9 @@ class Store:
             db.execute("""CREATE TABLE IF NOT EXISTS cleanup_leases (
                 name TEXT PRIMARY KEY, owner TEXT NOT NULL,
                 acquired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS pending_cover_cleanup (
+                run_id TEXT PRIMARY KEY, cover_path TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES daily_runs(id))""")
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -159,6 +162,7 @@ class Store:
             if not row or row["state"] != state:
                 return False
             db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM pending_cover_cleanup WHERE run_id=?", (run_id,))
             db.execute("DELETE FROM daily_runs WHERE id=? AND state=?", (run_id, state))
         return True
 
@@ -170,6 +174,7 @@ class Store:
                 raise KeyError(run_id)
             discarded = self._run(row)
             db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM pending_cover_cleanup WHERE run_id=?", (run_id,))
             db.execute("DELETE FROM daily_runs WHERE id=?", (run_id,))
             return discarded
 
@@ -223,9 +228,17 @@ class Store:
     def mark_publication_uncertain(self, run_id: str, error: str) -> Run:
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row or row["state"] != "publishing":
                 raise InvalidTransition("only publishing runs can become uncertain")
+            article = json.loads(row["article"]) if row["article"] else {}
+            cover_path = article.get("cover_path") if isinstance(article, dict) else None
+            if cover_path:
+                db.execute(
+                    """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                       ON CONFLICT(run_id) DO UPDATE SET cover_path=excluded.cover_path""",
+                    (run_id, cover_path),
+                )
             db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
             db.execute(
                 """UPDATE daily_runs
@@ -234,6 +247,15 @@ class Store:
                 (error[:500], run_id),
             )
         return self.get(run_id)
+
+    def pending_cover_cleanup(self, run_id: str) -> dict | None:
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT cover_path FROM pending_cover_cleanup WHERE run_id=?", (run_id,)).fetchone()
+        return {"cover_path": row["cover_path"]} if row else None
+
+    def clear_pending_cover_cleanup(self, run_id: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute("DELETE FROM pending_cover_cleanup WHERE run_id=?", (run_id,))
 
     def stale_publishing(self, run_id: str, minutes: int) -> Run | None:
         with closing(self._connect()) as db:

@@ -20,7 +20,7 @@ class DailyRun:
         self.cleanup = cleanup
 
     def get(self, run_id: str):
-        return self.store.get(run_id)
+        return self._recover_stale_publication(self.store.get(run_id))
 
     def events(self, run_id: str):
         return self.store.events(run_id)
@@ -68,23 +68,35 @@ class DailyRun:
         self.store.discard_if_state(run.id, "finalizing")
         return self._published_response(run)
 
-    def _recover_stale_publication(self, run):
-        """Stop a possibly-completed remote publish without ever retrying it."""
-        if run.state != "publishing" or not self.store.stale_publishing(run.id, minutes=30):
+    def _finish_uncertain_cleanup(self, run):
+        article = self.store.pending_cover_cleanup(run.id)
+        if not article or not self.cleanup:
             return run
         try:
-            if self.cleanup and run.article:
-                self.cleanup(run.article)
+            self.cleanup(article)
         except Exception as exc:
             logger.warning("run=%s stage=uncertain_cleanup_failed error=%s", run.id, type(exc).__name__)
-            return self.store.get(run.id)
+            return run
+        self.store.clear_pending_cover_cleanup(run.id)
+        return self.store.get(run.id)
+
+    def _mark_publication_uncertain(self, run, error: str):
         try:
-            return self.store.mark_publication_uncertain(
-                run.id,
-                "发布结果待确认：请先在微信草稿箱核对后再重新生成",
-            )
+            uncertain = self.store.mark_publication_uncertain(run.id, error)
         except InvalidTransition:
             return self.store.get(run.id)
+        return self._finish_uncertain_cleanup(uncertain)
+
+    def _recover_stale_publication(self, run):
+        """Stop a possibly-completed remote publish without ever retrying it."""
+        if run.state == "publication_uncertain":
+            return self._finish_uncertain_cleanup(run)
+        if run.state != "publishing" or not self.store.stale_publishing(run.id, minutes=30):
+            return run
+        return self._mark_publication_uncertain(
+            run,
+            "发布结果待确认：请先在微信草稿箱核对后再重新生成",
+        )
 
     def _claim_fresh(self, date: str, resolve_uncertain: bool = False):
         while True:
@@ -104,6 +116,8 @@ class DailyRun:
             if run.state == "publication_uncertain":
                 if not resolve_uncertain:
                     raise RuntimeError("发布结果待确认：请先在微信草稿箱核对后再重新生成")
+                if self.store.pending_cover_cleanup(run.id):
+                    raise RuntimeError("发布结果待确认：本地封面清理未完成，请稍后再试")
                 self.store.discard_if_state(run.id, "publication_uncertain")
                 continue
             if run.state not in {"ready", "failed"}:
@@ -182,7 +196,7 @@ class DailyRun:
         if run.state == "finalizing":
             return self._finish_finalization(run)
         if run.state == "publication_uncertain":
-            return run
+            return self._finish_uncertain_cleanup(run)
         if run.state != "ready":
             raise InvalidTransition(f"cannot publish {run.state}")
         self.store.transition(run.id, "publishing")
@@ -191,10 +205,11 @@ class DailyRun:
             article = {**run.article, "title": run.article.get("title", f"AI 行业热点新闻 | {run.date}")}
             media_id = self.publisher(article)
         except Exception as exc:
-            self.store.transition(run.id, "ready", str(exc))
-            self.store.record_event(run.id, "error", "error", str(exc))
-            logger.error("run=%s stage=failed error=%s", run.id, type(exc).__name__)
-            raise
+            logger.warning("run=%s stage=publication_uncertain error=%s", run.id, type(exc).__name__)
+            return self._mark_publication_uncertain(
+                run,
+                "发布结果待确认：请先在微信草稿箱核对后再重新生成",
+            )
         try:
             published = self.store.mark_finalizing(run.id, media_id)
         except Exception as exc:
