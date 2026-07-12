@@ -224,6 +224,13 @@
       $("cornerBadge").textContent = "CHECK";
       $("fetchHint").textContent = "发布结果待确认：请先在微信草稿箱核对";
       setStatus("failed", "发布结果待确认", "请先核对微信草稿箱；确认后再次点击抓取，才会重新生成。");
+    } else if (run.state === "finalizing") {
+      renderArticle(null);
+      renderCover(null);
+      $("btnPublish").disabled = true;
+      $("cornerBadge").textContent = "CLEAN";
+      $("fetchHint").textContent = "微信草稿已创建，正在清理本地封面";
+      setStatus("running", "微信草稿已创建", "正在清理本地封面，完成后会自动清空页面。");
     } else if (active) {
       const latest = run.events?.at(-1)?.message || "正在处理";
       $("cornerBadge").textContent = "BUSY";
@@ -424,6 +431,9 @@
       renderRun(run);
       if (run.state === "publication_uncertain") {
         toast("发布结果待确认，请先在微信草稿箱核对", "error");
+      } else if (run.state === "finalizing") {
+        toast("微信草稿已创建，正在清理本地封面", "success");
+        pollRun();
       } else {
         toast("微信草稿已创建", "success");
       }
