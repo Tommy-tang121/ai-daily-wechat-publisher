@@ -158,20 +158,6 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(retried.state, "queued")
         self.assertTrue(retried.owner)
 
-    def test_failed_publish_with_an_article_retries_from_ready_without_regenerating(self):
-        run = self.store.claim("2026-07-10")
-        self.store.transition(run.id, "scraping")
-        self.store.transition(run.id, "rewriting")
-        self.store.save_article(run.id, {"markdown": "article"})
-        self.store.transition(run.id, "publishing")
-        self.store.transition(run.id, "failed", "publisher unavailable")
-
-        retried = self.store.retry(run.id)
-
-        self.assertEqual(retried.state, "ready")
-        self.assertFalse(retried.owner)
-        self.assertEqual(retried.article, {"markdown": "article"})
-
     def test_events_are_persisted_in_the_order_they_happened(self):
         run = self.store.claim("2026-07-10")
         self.store.record_event(run.id, "scraping", "progress", "Fetching sources")
@@ -238,6 +224,22 @@ class StoreTests(unittest.TestCase):
 
         self.assertFalse(reclaimed.owner)
         self.assertEqual(reclaimed.state, "publishing")
+
+    def test_publishing_run_cannot_be_returned_to_a_retryable_state(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article"})
+        publishing, _ = self.store.begin_publication(run.id)
+
+        with self.assertRaisesRegex(InvalidTransition, "publishing -> ready"):
+            self.store.transition(publishing.id, "ready")
+        with self.assertRaisesRegex(InvalidTransition, "publishing -> failed"):
+            self.store.transition(publishing.id, "failed", "publisher unavailable")
+
+        retained = self.store.get(publishing.id)
+        self.assertEqual(retained.state, "publishing")
+        self.assertIsNone(retained.article)
 
     def test_publication_uncertain_discards_article_receipt_and_events(self):
         run = self.store.claim("2026-07-10")

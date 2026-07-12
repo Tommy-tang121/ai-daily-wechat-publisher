@@ -5,6 +5,8 @@ from threading import Thread
 
 from flask import Flask, abort, jsonify, request
 
+from .daily_run import PublicationUncertainError
+
 
 def _payload(run):
     if is_dataclass(run):
@@ -101,9 +103,9 @@ def create_app(runner, settings=None, tasks=None):
                 fresh=True,
                 resolve_uncertain=body.get("resolve_uncertain") is True,
             )
+        except PublicationUncertainError as exc:
+            return jsonify(error=str(exc), state="publication_uncertain", code="publication_uncertain"), 409
         except Exception as exc:
-            if "发布结果待确认" in str(exc):
-                return jsonify(error=str(exc), state="publication_uncertain"), 409
             return jsonify(error=str(exc)), 502
         if getattr(run, "owner", False):
             Thread(target=runner.execute, args=(run.id, date, run_settings), daemon=True).start()

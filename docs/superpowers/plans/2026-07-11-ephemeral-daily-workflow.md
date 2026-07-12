@@ -4,7 +4,7 @@
 
 **Goal:** Make every completed daily article temporary, allow manual re-generation for any date, and remove the existing WeChat legacy draft plus all local historical runs.
 
-**Architecture:** SQLite remains only for active work and generation failures that occurred before calling WeChat. Once the WeChat publisher is invoked, either a successful response or an exception is never retried automatically: success immediately removes public article/event/receipt data, while an unknown outcome becomes `publication_uncertain`. A separate private cover-cleanup marker may retain only a safe local cover path until deletion succeeds. A one-time CLI cleanup uses the same WeChat credentials as the current publisher to delete the existing draft before purging the final local receipt.
+**Architecture:** SQLite remains only for active work and generation failures that occurred before calling WeChat. Immediately before the WeChat publisher is invoked, one local transaction detaches article/event/receipt data and retains the article only in process memory. Once the publisher is invoked, neither a success nor an exception is retried automatically: success enters `finalizing` with only a private cover-cleanup marker, while an unknown outcome becomes `publication_uncertain`. A separate private cover-cleanup marker may retain only a safe local cover path until deletion succeeds. A one-time CLI cleanup uses the same WeChat credentials as the current publisher to delete the existing draft before purging the final local receipt.
 
 **Tech Stack:** Python 3.12, unittest, Flask, SQLite, Pillow, requests, existing baoyu-post-to-wechat publisher.
 
@@ -50,7 +50,7 @@ Replace the failed-publish expectation: a publisher invocation error has an unkn
 
 - [ ] Step 5: Implement successful-publish cleanup
 
-Add cleanup=None to DailyRun.__init__. In DailyRun.publish, atomically move a successful response to private finalization metadata before cleanup: clear the article, events and receipt, retain only the local cover path, then delete the record once cleanup succeeds. A publisher invocation exception follows the same content-clearing path into `publication_uncertain`; it is not a ready retry.
+Add cleanup=None to DailyRun.__init__. In DailyRun.publish, atomically detach article, events and receipt before invoking the publisher, retaining the article only in memory. Move a successful response to private finalization metadata before cleanup: retain only the local cover path, return `finalizing` while cleanup fails, then delete the record once a later cleanup succeeds. A publisher invocation exception—or a local finalization write failure after the remote response—follows the same content-clearing path into `publication_uncertain`; it is not a ready retry.
 
 Add fresh=False to DailyRun.start and DailyRun.prepare. When fresh=True, use Store.claim_fresh; web manual generation will use this flag while scheduler retries will not.
 

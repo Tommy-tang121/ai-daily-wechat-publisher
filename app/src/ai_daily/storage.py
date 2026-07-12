@@ -26,7 +26,9 @@ ALLOWED = {
     "scraping": {"rewriting", "failed"},
     "rewriting": {"ready", "failed"},
     "ready": {"publishing", "failed"},
-    "publishing": {"finalizing", "published", "ready", "failed"},
+    # A publisher call may already have created a remote draft. Only dedicated
+    # persistence methods may leave this state; generic transitions cannot.
+    "publishing": set(),
     "finalizing": set(),
     "publication_uncertain": set(),
     "published": set(),
@@ -213,6 +215,32 @@ class Store:
             db.execute("UPDATE daily_runs SET state='published', media_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                        (media_id, run_id))
         return self.get(run_id)
+
+    def begin_publication(self, run_id: str) -> tuple[Run, dict]:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != "ready" or not row["article"]:
+                raise InvalidTransition("only ready runs with an article can publish")
+            article = json.loads(row["article"])
+            cover_path = article.get("cover_path") if isinstance(article, dict) else None
+            if cover_path:
+                db.execute(
+                    """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                       ON CONFLICT(run_id) DO UPDATE SET cover_path=excluded.cover_path""",
+                    (run_id, cover_path),
+                )
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            updated = db.execute(
+                """UPDATE daily_runs
+                   SET state='publishing', article=NULL, media_id='', error='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='ready'""",
+                (run_id,),
+            )
+            if not updated.rowcount:
+                raise InvalidTransition("ready -> publishing")
+            published = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+        return self._run(published), article
 
     def mark_finalizing(self, run_id: str, media_id: str) -> Run:
         if not media_id:

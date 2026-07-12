@@ -1,6 +1,7 @@
 (function () {
   const state = { calYear: 0, calMonth: 0, configLoaded: false, run: null, runId: "", selectedDate: "", timer: null };
   const stepNames = ["scraping", "rewriting", "formatting", "cover", "done"];
+  const activeStates = ["queued", "scraping", "rewriting", "publishing", "finalizing"];
   const $ = (id) => document.getElementById(id);
   const pad = (value) => String(value).padStart(2, "0");
   const dateValue = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -21,6 +22,7 @@
     if (!response.ok) {
       const error = new Error(payload.error || "请求失败");
       error.status = response.status;
+      error.code = payload.code;
       throw error;
     }
     return payload;
@@ -193,7 +195,7 @@
     if (run.id) localStorage.setItem("ai-daily-run-id", run.id);
     resetProgress();
     (run.events || []).forEach(applyEvent);
-    const active = ["queued", "scraping", "rewriting", "publishing"].includes(run.state);
+    const active = activeStates.includes(run.state);
     $("btnFetch").disabled = active;
     $("cornerTag").classList.toggle("show", active || run.state === "failed");
 
@@ -237,19 +239,35 @@
     state.timer = null;
   }
 
+  function clearDeletedRun() {
+    stopPolling();
+    state.run = null;
+    state.runId = "";
+    localStorage.removeItem("ai-daily-run-id");
+    renderArticle(null);
+    renderCover(null);
+    $("btnFetch").disabled = false;
+    $("btnPublish").disabled = true;
+    $("cornerTag").classList.remove("show");
+    setStatus("idle", "等待操作", "请选择日期后点击「抓取」开始。");
+  }
+
   async function pollRun() {
     if (!state.runId) return;
     try {
       const run = await requestJson(`/api/runs/${encodeURIComponent(state.runId)}`);
       renderRun(run);
-      if (["queued", "scraping", "rewriting", "publishing"].includes(run.state)) {
+      if (activeStates.includes(run.state)) {
         state.timer = window.setTimeout(pollRun, 1000);
       } else {
         stopPolling();
       }
     } catch (error) {
+      if (error.status === 404) {
+        clearDeletedRun();
+        return;
+      }
       stopPolling();
-      localStorage.removeItem("ai-daily-run-id");
       setStatus("failed", "无法读取运行进度", error.message);
     }
   }
@@ -264,21 +282,12 @@
       const restored = new Date(`${run.date}T00:00:00`);
       renderCalendar(restored.getFullYear(), restored.getMonth());
       renderRun(run);
-      if (["queued", "scraping", "rewriting", "publishing"].includes(run.state)) {
+      if (activeStates.includes(run.state)) {
         state.timer = window.setTimeout(pollRun, 1000);
       }
     } catch (error) {
       if (error.status === 404) {
-        stopPolling();
-        state.run = null;
-        state.runId = "";
-        localStorage.removeItem("ai-daily-run-id");
-        renderArticle(null);
-        renderCover(null);
-        $("btnFetch").disabled = false;
-        $("btnPublish").disabled = true;
-        $("cornerTag").classList.remove("show");
-        setStatus("idle", "等待操作", "请选择日期后点击「抓取」开始。");
+        clearDeletedRun();
         return;
       }
       throw error;
@@ -343,22 +352,38 @@
     }
   });
 
+  async function startRun(date, resolveUncertain) {
+    return requestJson("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, retry: true, resolve_uncertain: resolveUncertain }),
+    });
+  }
+
   $("btnFetch").addEventListener("click", async () => {
     if (!state.selectedDate) return;
     stopPolling();
+    const date = state.selectedDate;
     try {
-      const resolveUncertain = state.run?.state === "publication_uncertain" && state.run.date === state.selectedDate;
-      if (resolveUncertain && !window.confirm("请先确认微信草稿箱中没有这篇草稿。确认后才会重新生成，是否继续？")) return;
       await saveSettings({
         title: $("inputTitle").value,
         author: $("inputAuthor").value,
         max_words: Number($("inputMaxWords").value) || 150,
       });
-      const run = await requestJson("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: state.selectedDate, retry: true, resolve_uncertain: resolveUncertain }),
-      });
+      let run;
+      try {
+        run = await startRun(date, false);
+      } catch (error) {
+        if (error.code === "publication_uncertain") {
+          if (!window.confirm("请先确认微信草稿箱中没有这篇草稿。确认后才会重新生成，是否继续？")) {
+            setStatus("failed", "发布结果待确认", "请先核对微信草稿箱。");
+            return;
+          }
+          run = await startRun(date, true);
+        } else {
+          throw error;
+        }
+      }
       renderRun(run);
       pollRun();
     } catch (error) {

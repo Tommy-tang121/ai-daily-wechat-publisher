@@ -6,6 +6,7 @@ import time
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
@@ -179,8 +180,9 @@ class WorkflowTests(unittest.TestCase):
         def publish(article):
             publishing = store.get(ready.id)
             self.assertEqual(publishing.state, "publishing")
-            self.assertEqual(publishing.article, article)
-            self.assertGreater(len(store.events(ready.id)), 0)
+            self.assertIsNone(publishing.article)
+            self.assertEqual(publishing.media_id, "")
+            self.assertEqual(store.events(ready.id), [])
             self.assertTrue(cover_path.is_file())
             publisher_calls.append(article.copy())
             return "draft-1"
@@ -239,7 +241,7 @@ class WorkflowTests(unittest.TestCase):
 
         published = runner.publish("2026-07-10")
 
-        self.assertEqual(published.state, "published")
+        self.assertEqual(published.state, "finalizing")
         self.assertEqual(published.media_id, "")
         self.assertIsNone(published.article)
         retained = store.get(ready.id)
@@ -248,15 +250,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(retained.article)
         self.assertEqual(store.events(ready.id), [])
 
-        recovered = runner.get(ready.id)
-
-        self.assertEqual(recovered.state, "published")
-        self.assertEqual(recovered.media_id, "")
-        self.assertIsNone(recovered.article)
-        self.assertEqual(len(publisher_calls), 1)
-        self.assertEqual(len(cleanup_calls), 2)
         with self.assertRaises(KeyError):
             runner.get(ready.id)
+
+        self.assertEqual(len(publisher_calls), 1)
+        self.assertEqual(len(cleanup_calls), 2)
 
     def test_finalization_blocks_history_cleanup_after_remote_draft_succeeds(self):
         date = "2026-07-10"
@@ -540,6 +538,71 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(uncertain.article)
         self.assertEqual(uncertain.media_id, "")
         self.assertEqual(runner.events(ready.id), [])
+
+    def test_finalization_write_failure_becomes_uncertain_without_republishing(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        ready = self._ready_run(store, "2026-07-10")
+        calls = []
+        runner = DailyRun(
+            store,
+            None,
+            lambda article: calls.append(article) or "draft-1",
+            cleanup=lambda article: None,
+        )
+
+        with patch.object(store, "mark_finalizing", side_effect=RuntimeError("receipt write failed")):
+            uncertain = runner.publish(ready.date)
+
+        repeated = runner.publish(ready.date)
+
+        self.assertEqual(uncertain.state, "publication_uncertain")
+        self.assertEqual(repeated.state, "publication_uncertain")
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(uncertain.article)
+        self.assertEqual(uncertain.media_id, "")
+        self.assertEqual(runner.events(ready.id), [])
+
+    def test_uncertain_write_failure_never_restores_or_republishes_detached_content(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        ready = self._ready_run(store, "2026-07-10")
+        store.record_event(ready.id, "done", "complete", "ready")
+        calls = []
+        runner = DailyRun(
+            store,
+            None,
+            lambda article: calls.append(article) or "draft-1",
+            cleanup=lambda article: None,
+        )
+        persist_uncertain = store.mark_publication_uncertain
+        attempts = 0
+
+        def fail_once_then_persist(run_id, error):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("database unavailable")
+            return persist_uncertain(run_id, error)
+
+        with patch.object(store, "mark_finalizing", side_effect=RuntimeError("receipt write failed")), patch.object(
+            store, "mark_publication_uncertain", side_effect=fail_once_then_persist
+        ):
+            first = runner.publish(ready.date)
+
+            self.assertEqual(first.state, "publishing")
+            self.assertIsNone(first.article)
+            self.assertEqual(first.media_id, "")
+            self.assertEqual(runner.events(ready.id), [])
+            with closing(store._connect()) as db, db:
+                db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (ready.id,))
+
+            recovered = runner.get(ready.id)
+            repeated = runner.publish(ready.date)
+
+        self.assertEqual(recovered.state, "publication_uncertain")
+        self.assertEqual(repeated.state, "publication_uncertain")
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(store.get(ready.id).article)
+        self.assertEqual(store.events(ready.id), [])
 
     def test_uncertain_publish_keeps_only_a_retryable_cover_cleanup_marker(self):
         store = Store(Path(self.tmp.name) / "daily.db")

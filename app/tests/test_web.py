@@ -5,12 +5,12 @@ import warnings
 import gc
 from contextlib import closing
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from ai_daily.web import create_app
-from ai_daily.daily_run import DailyRun
+from ai_daily.daily_run import DailyRun, PublicationUncertainError
 from ai_daily.storage import Store
 
 
@@ -66,7 +66,7 @@ class ConfirmationRunner(FakeRunner):
     def start(self, date, settings, retry=False, fresh=False, resolve_uncertain=False):
         run = super().start(date, settings, retry, fresh, resolve_uncertain)
         if not resolve_uncertain:
-            raise RuntimeError("发布结果待确认：请先在微信草稿箱核对")
+            raise PublicationUncertainError("发布结果待确认：请先在微信草稿箱核对")
         return run
 
 
@@ -124,6 +124,7 @@ class WebTests(unittest.TestCase):
 
         self.assertEqual(rejected.status_code, 409)
         self.assertEqual(rejected.get_json()["state"], "publication_uncertain")
+        self.assertEqual(rejected.get_json()["code"], "publication_uncertain")
         self.assertIn("发布结果待确认", rejected.get_json()["error"])
         self.assertFalse(runner.executed.is_set())
 
@@ -169,6 +170,41 @@ class WebTests(unittest.TestCase):
         self.assertNotIn("cover_path", payload)
         self.assertEqual(cleaned, ["C:/covers/2026-07-10.png"])
 
+    def test_read_hides_content_while_the_publisher_is_still_running(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp) / "daily.db")
+            run = store.claim("2026-07-10")
+            store.transition(run.id, "scraping")
+            store.transition(run.id, "rewriting")
+            store.save_article(
+                run.id,
+                {"date": run.date, "markdown": "article", "cover_path": "C:/covers/2026-07-10.png"},
+            )
+            store.record_event(run.id, "done", "complete", "ready")
+            started = Event()
+            release = Event()
+
+            def publisher(article):
+                started.set()
+                release.wait(1)
+                return "draft-1"
+
+            runner = DailyRun(store, None, publisher, cleanup=lambda article: None)
+            worker = Thread(target=lambda: runner.publish(run.date))
+            worker.start()
+            self.assertTrue(started.wait(1))
+
+            response = create_app(runner).test_client().get(f"/api/runs/{run.id}")
+
+            release.set()
+            worker.join(1)
+
+        payload = response.get_json()
+        self.assertEqual(payload["state"], "publishing")
+        self.assertIsNone(payload["article"])
+        self.assertEqual(payload["media_id"], "")
+        self.assertEqual(payload["events"], [])
+
     def test_read_hides_a_finalizing_run_while_retrying_its_cover_cleanup(self):
         with tempfile.TemporaryDirectory() as temp:
             store = Store(Path(temp) / "daily.db")
@@ -190,18 +226,20 @@ class WebTests(unittest.TestCase):
                     raise RuntimeError("cover locked")
 
             runner = DailyRun(store, None, None, cleanup=cleanup)
-            runner.publish(run.date)
-            response = create_app(runner).test_client().get(f"/api/runs/{run.id}")
+            client = create_app(runner).test_client()
+            first = client.get(f"/api/runs/{run.id}")
+            second = client.get(f"/api/runs/{run.id}")
 
             with self.assertRaises(KeyError):
                 store.get(run.id)
 
-        payload = response.get_json()
-        self.assertEqual(payload["state"], "published")
-        self.assertIsNone(payload["article"])
-        self.assertEqual(payload["media_id"], "")
-        self.assertEqual(payload["events"], [])
-        self.assertNotIn("cover_path", payload)
+        first_payload = first.get_json()
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first_payload["state"], "finalizing")
+        self.assertIsNone(first_payload["article"])
+        self.assertEqual(first_payload["media_id"], "")
+        self.assertEqual(first_payload["events"], [])
+        self.assertEqual(second.status_code, 404)
         self.assertEqual(cleanup_calls, ["C:/covers/2026-07-10.png", "C:/covers/2026-07-10.png"])
 
     def test_settings_api_reads_and_saves_the_same_runner_settings(self):
@@ -280,6 +318,7 @@ class WebTests(unittest.TestCase):
         script = create_app(FakeRunner()).test_client().get("/static/app.js").data
 
         self.assertIn(b"error.status = response.status;", script)
+        self.assertIn(b"error.code = payload.code;", script)
         self.assertIn(b"async function restoreRun() {", script)
         self.assertIn(b"if (error.status === 404)", script)
         self.assertIn(b'state.runId = "";', script)
@@ -293,4 +332,7 @@ class WebTests(unittest.TestCase):
         self.assertIn("发布结果待确认".encode(), script)
         self.assertIn(b"window.confirm(", script)
         self.assertIn(b"resolve_uncertain: resolveUncertain", script)
+        self.assertIn(b'error.code === "publication_uncertain"', script)
+        self.assertIn(b"startRun(date, true)", script)
+        self.assertIn(b'"finalizing"', script)
         self.assertIn("toast(\"发布结果待确认，请先在微信草稿箱核对\", \"error\")".encode(), script)

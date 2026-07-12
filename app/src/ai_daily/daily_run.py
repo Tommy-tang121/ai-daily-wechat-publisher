@@ -8,6 +8,10 @@ from .storage import InvalidTransition
 logger = logging.getLogger("ai_daily")
 
 
+class PublicationUncertainError(RuntimeError):
+    pass
+
+
 class DailyRun:
     """The sole workflow interface for browser and scheduled execution."""
 
@@ -22,7 +26,10 @@ class DailyRun:
     def get(self, run_id: str):
         run = self.store.get(run_id)
         if run.state == "finalizing":
-            return self._finish_finalization(run)
+            finished = self._finish_finalization(run)
+            if finished.state == "finalizing":
+                return finished
+            raise KeyError(run_id)
         return self._recover_stale_publication(run)
 
     def events(self, run_id: str):
@@ -77,7 +84,7 @@ class DailyRun:
         if run.state != "finalizing":
             raise InvalidTransition(f"cannot finalize {run.state}")
         if not self._finish_pending_cover_cleanup(run, "finalization_cleanup_failed"):
-            return self._published_response(run)
+            return run
         self.store.discard_if_state(run.id, "finalizing")
         return self._published_response(run)
 
@@ -89,6 +96,9 @@ class DailyRun:
         try:
             uncertain = self.store.mark_publication_uncertain(run.id, error)
         except InvalidTransition:
+            return self.store.get(run.id)
+        except Exception as exc:
+            logger.warning("run=%s stage=uncertain_write_failed error=%s", run.id, type(exc).__name__)
             return self.store.get(run.id)
         return self._finish_uncertain_cleanup(uncertain)
 
@@ -120,9 +130,9 @@ class DailyRun:
                 raise RuntimeError("legacy published runs require cleanup-history before fresh generation")
             if run.state == "publication_uncertain":
                 if not resolve_uncertain:
-                    raise RuntimeError("发布结果待确认：请先在微信草稿箱核对后再重新生成")
+                    raise PublicationUncertainError("发布结果待确认：请先在微信草稿箱核对后再重新生成")
                 if self.store.pending_cover_cleanup(run.id):
-                    raise RuntimeError("发布结果待确认：本地封面清理未完成，请稍后再试")
+                    raise PublicationUncertainError("发布结果待确认：本地封面清理未完成，请稍后再试")
                 self.store.discard_if_state(run.id, "publication_uncertain")
                 continue
             if run.state not in {"ready", "failed"}:
@@ -204,22 +214,25 @@ class DailyRun:
             return self._finish_uncertain_cleanup(run)
         if run.state != "ready":
             raise InvalidTransition(f"cannot publish {run.state}")
-        self.store.transition(run.id, "publishing")
+        publishing, article = self.store.begin_publication(run.id)
         logger.info("run=%s stage=publishing", run.id)
         try:
-            article = {**run.article, "title": run.article.get("title", f"AI 行业热点新闻 | {run.date}")}
+            article = {**article, "title": article.get("title", f"AI 行业热点新闻 | {run.date}")}
             media_id = self.publisher(article)
         except Exception as exc:
             logger.warning("run=%s stage=publication_uncertain error=%s", run.id, type(exc).__name__)
             return self._mark_publication_uncertain(
-                run,
+                publishing,
                 "发布结果待确认：请先在微信草稿箱核对后再重新生成",
             )
         try:
             published = self.store.mark_finalizing(run.id, media_id)
         except Exception as exc:
             logger.error("run=%s stage=receipt_persist_failed error=%s", run.id, type(exc).__name__)
-            raise
+            return self._mark_publication_uncertain(
+                publishing,
+                "发布结果待确认：请先在微信草稿箱核对后再重新生成",
+            )
         published = self._finish_finalization(published)
         logger.info("run=%s stage=published", run.id)
         return published
