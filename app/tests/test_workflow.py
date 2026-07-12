@@ -177,6 +177,11 @@ class WorkflowTests(unittest.TestCase):
             Path(article["cover_path"]).unlink()
 
         def publish(article):
+            publishing = store.get(ready.id)
+            self.assertEqual(publishing.state, "publishing")
+            self.assertEqual(publishing.article, article)
+            self.assertGreater(len(store.events(ready.id)), 0)
+            self.assertTrue(cover_path.is_file())
             publisher_calls.append(article.copy())
             return "draft-1"
 
