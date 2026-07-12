@@ -136,7 +136,7 @@ Expected: WeChatPublisher has no delete_draft method.
 Add token and draft-delete URL constants to publishing.py. Implement WeChatPublisher.delete_draft using requests.get for the token and requests.post for deletion, both with timeout=(15, 30). Validate access_token and errcode; report only WeChat error text or code, never request URLs or credentials.
 
 Add DailyRun.clear_history(delete_draft) that:
-1. refuses when any run is active;
+1. refuses when a run is active within the stale window, or is finalizing/publication-uncertain; atomically converts eligible historical rows to cleaning while clearing article/event data and moving only cover cleanup paths to private metadata;
 2. reads all saved runs;
 3. deletes every WeChat draft receipt through delete_draft before any local row is removed;
 4. invokes the runtime cover cleanup and Store.discard for every local run only after all external deletions succeed.

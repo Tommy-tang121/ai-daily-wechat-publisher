@@ -54,8 +54,8 @@ class DailyRun:
 
             for run in runs:
                 self.store.require_cleanup_lease(owner)
-                if self.cleanup and run.article:
-                    self.cleanup(run.article)
+                if not self._finish_pending_cover_cleanup(run, "history_cover_cleanup_failed"):
+                    raise RuntimeError("history cover cleanup failed")
                 if not self.store.discard_if_state(run.id, "cleaning"):
                     raise RuntimeError("history cleanup record changed")
         finally:

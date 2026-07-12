@@ -371,17 +371,17 @@ class WorkflowTests(unittest.TestCase):
 
     def test_clear_history_deletes_every_draft_before_removing_local_runs(self):
         store = Store(Path(self.tmp.name) / "daily.db")
-        first = self._published_run(store, "2026-07-10", "draft-1")
-        second = self._published_run(store, "2026-07-11", "draft-2")
+        first = self._published_run(store, "2026-07-10", "draft-1", "C:/covers/2026-07-10.png")
+        second = self._published_run(store, "2026-07-11", "draft-2", "C:/covers/2026-07-11.png")
         deleted = []
         cleaned = []
-        runner = DailyRun(store, None, None, cleanup=lambda article: cleaned.append(article["date"]))
+        runner = DailyRun(store, None, None, cleanup=lambda article: cleaned.append(article["cover_path"]))
 
         summary = runner.clear_history(deleted.append)
 
         self.assertEqual(summary, {"count": 2, "dates": ["2026-07-10", "2026-07-11"]})
         self.assertEqual(deleted, ["draft-1", "draft-2"])
-        self.assertEqual(cleaned, ["2026-07-10", "2026-07-11"])
+        self.assertEqual(cleaned, ["C:/covers/2026-07-10.png", "C:/covers/2026-07-11.png"])
         with self.assertRaises(KeyError):
             store.get(first.id)
         with self.assertRaises(KeyError):
@@ -389,10 +389,13 @@ class WorkflowTests(unittest.TestCase):
 
     def test_clear_history_resumes_after_a_partial_draft_deletion_failure(self):
         store = Store(Path(self.tmp.name) / "daily.db")
-        first = self._published_run(store, "2026-07-10", "draft-1")
-        second = self._published_run(store, "2026-07-11", "draft-2")
+        first = self._published_run(store, "2026-07-10", "draft-1", "C:/covers/2026-07-10.png")
+        second = self._published_run(store, "2026-07-11", "draft-2", "C:/covers/2026-07-11.png")
+        store.record_event(first.id, "done", "complete", "private progress")
+        store.record_event(second.id, "done", "complete", "private progress")
         deleted = []
-        runner = DailyRun(store, None, None)
+        cleaned = []
+        runner = DailyRun(store, None, None, cleanup=lambda article: cleaned.append(article["cover_path"]))
 
         def delete_draft(media_id):
             deleted.append(media_id)
@@ -405,14 +408,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(deleted, ["draft-1", "draft-2"])
         self.assertEqual(store.get(first.id).state, "cleaning")
         self.assertEqual(store.get(first.id).media_id, "")
+        self.assertIsNone(store.get(first.id).article)
+        self.assertEqual(store.events(first.id), [])
+        self.assertEqual(store.pending_cover_cleanup(first.id), {"cover_path": "C:/covers/2026-07-10.png"})
         self.assertEqual(store.get(second.id).state, "cleaning")
         self.assertEqual(store.get(second.id).media_id, "draft-2")
+        self.assertIsNone(store.get(second.id).article)
+        self.assertEqual(store.events(second.id), [])
+        self.assertEqual(store.pending_cover_cleanup(second.id), {"cover_path": "C:/covers/2026-07-11.png"})
 
         deleted = []
         summary = runner.clear_history(deleted.append)
 
         self.assertEqual(deleted, ["draft-2"])
         self.assertEqual(summary, {"count": 2, "dates": ["2026-07-10", "2026-07-11"]})
+        self.assertEqual(cleaned, ["C:/covers/2026-07-10.png", "C:/covers/2026-07-11.png"])
         with self.assertRaises(KeyError):
             store.get(first.id)
         with self.assertRaises(KeyError):
@@ -473,6 +483,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(deleted, [])
         self.assertEqual(store.get(active.id).state, "queued")
 
+    def test_clear_history_discards_a_stale_queued_legacy_run_without_publishing(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        stale = store.claim("2026-07-07")
+        store.record_event(stale.id, "scraping", "progress", "legacy progress")
+        with closing(store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (stale.id,))
+        publisher_calls = []
+        deleted = []
+        runner = DailyRun(store, None, lambda article: publisher_calls.append(article))
+
+        summary = runner.clear_history(deleted.append)
+
+        self.assertEqual(summary, {"count": 1, "dates": ["2026-07-07"]})
+        self.assertEqual(publisher_calls, [])
+        self.assertEqual(deleted, [])
+        with self.assertRaises(KeyError):
+            store.get(stale.id)
+
     def test_clear_history_refuses_before_deleting_when_a_run_is_publishing(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         active = self._ready_run(store, "2026-07-10")
@@ -505,17 +533,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(remote_publishes, [])
 
     @staticmethod
-    def _published_run(store, date, media_id):
-        run = WorkflowTests._ready_run(store, date)
+    def _published_run(store, date, media_id, cover_path=None):
+        run = WorkflowTests._ready_run(store, date, cover_path)
         store.transition(run.id, "publishing")
         return store.mark_published(run.id, media_id)
 
     @staticmethod
-    def _ready_run(store, date):
+    def _ready_run(store, date, cover_path=None):
         run = store.claim(date)
         store.transition(run.id, "scraping")
         store.transition(run.id, "rewriting")
-        return store.save_article(run.id, {"date": date, "markdown": "article", "items": []})
+        article = {"date": date, "markdown": "article", "items": []}
+        if cover_path:
+            article["cover_path"] = cover_path
+        return store.save_article(run.id, article)
 
     def test_publish_error_becomes_uncertain_and_never_retries_the_remote_call(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]

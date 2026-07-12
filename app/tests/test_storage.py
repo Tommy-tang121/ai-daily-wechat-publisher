@@ -111,6 +111,73 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(claimed.id, run.id)
         self.assertEqual(claimed.state, "cleaning")
 
+    def test_begin_cleanup_strips_content_events_and_moves_cover_to_private_metadata(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(
+            run.id,
+            {"markdown": "private article", "cover_path": "C:/covers/2026-07-10.png"},
+        )
+        self.store.record_event(run.id, "done", "complete", "private progress")
+        self.store.transition(run.id, "publishing")
+        self.store.mark_published(run.id, "draft-1")
+
+        runs = self.store.begin_cleanup("cleanup-owner")
+
+        self.assertEqual(runs[0].state, "cleaning")
+        self.assertIsNone(runs[0].article)
+        self.assertEqual(runs[0].media_id, "draft-1")
+        retained = self.store.get(run.id)
+        self.assertEqual(retained.state, "cleaning")
+        self.assertIsNone(retained.article)
+        self.assertEqual(retained.media_id, "draft-1")
+        self.assertEqual(self.store.events(run.id), [])
+        self.assertEqual(self.store.pending_cover_cleanup(run.id), {"cover_path": "C:/covers/2026-07-10.png"})
+
+    def test_begin_cleanup_blocks_recent_active_states(self):
+        for state in ("queued", "scraping", "rewriting", "publishing"):
+            with self.subTest(state=state):
+                store = Store(Path(self._tmp.name) / f"{state}.db")
+                run = store.claim("2026-07-10")
+                if state in {"scraping", "rewriting", "publishing"}:
+                    store.transition(run.id, "scraping")
+                if state in {"rewriting", "publishing"}:
+                    store.transition(run.id, "rewriting")
+                if state == "publishing":
+                    store.save_article(run.id, {"markdown": "article"})
+                    store.begin_publication(run.id)
+
+                with self.assertRaisesRegex(RuntimeError, "active"):
+                    store.begin_cleanup("cleanup-owner")
+
+                self.assertEqual(store.get(run.id).state, state)
+
+    def test_begin_cleanup_converges_stale_active_states_without_retaining_content(self):
+        for state in ("queued", "scraping", "rewriting", "publishing"):
+            with self.subTest(state=state):
+                store = Store(Path(self._tmp.name) / f"stale-{state}.db")
+                run = store.claim("2026-07-10")
+                if state in {"scraping", "rewriting", "publishing"}:
+                    store.transition(run.id, "scraping")
+                if state in {"rewriting", "publishing"}:
+                    store.transition(run.id, "rewriting")
+                if state == "publishing":
+                    store.save_article(run.id, {"markdown": "article", "cover_path": "C:/covers/2026-07-10.png"})
+                    store.begin_publication(run.id)
+                else:
+                    store.record_event(run.id, "scraping", "progress", "legacy progress")
+                with closing(store._connect()) as db, db:
+                    db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+
+                runs = store.begin_cleanup("cleanup-owner")
+
+                self.assertEqual(runs[0].state, "cleaning")
+                self.assertIsNone(runs[0].article)
+                self.assertEqual(store.get(run.id).state, "cleaning")
+                self.assertIsNone(store.get(run.id).article)
+                self.assertEqual(store.events(run.id), [])
+
     def test_invalid_transition_is_rejected(self):
         run = self.store.claim("2026-07-10")
         with self.assertRaises(InvalidTransition):

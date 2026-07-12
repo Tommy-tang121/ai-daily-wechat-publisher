@@ -242,6 +242,30 @@ class WebTests(unittest.TestCase):
         self.assertEqual(second.status_code, 404)
         self.assertEqual(cleanup_calls, ["C:/covers/2026-07-10.png", "C:/covers/2026-07-10.png"])
 
+    def test_read_hides_cleanup_receipts_and_content_after_history_cleanup_starts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp) / "daily.db")
+            run = store.claim("2026-07-10")
+            store.transition(run.id, "scraping")
+            store.transition(run.id, "rewriting")
+            store.save_article(
+                run.id,
+                {"date": run.date, "markdown": "private article", "cover_path": "C:/covers/2026-07-10.png"},
+            )
+            store.record_event(run.id, "done", "complete", "private progress")
+            store.transition(run.id, "publishing")
+            store.mark_published(run.id, "draft-1")
+            store.begin_cleanup("cleanup-owner")
+            response = create_app(DailyRun(store, None, None)).test_client().get(f"/api/runs/{run.id}")
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["state"], "cleaning")
+        self.assertIsNone(payload["article"])
+        self.assertEqual(payload["events"], [])
+        self.assertEqual(payload["media_id"], "")
+        self.assertNotIn("cover_path", payload)
+
     def test_settings_api_reads_and_saves_the_same_runner_settings(self):
         client = create_app(FakeRunner()).test_client()
         self.assertEqual(client.get("/api/config").get_json()["max_words"], 150)

@@ -37,10 +37,11 @@ ALLOWED = {
 }
 
 ACTIVE_STATES = {"queued", "scraping", "rewriting", "publishing"}
-HISTORY_BLOCKING_STATES = ACTIVE_STATES | {"finalizing", "publication_uncertain"}
+HISTORY_BLOCKING_STATES = {"finalizing", "publication_uncertain"}
 RECLAIMABLE_STATES = {"queued", "scraping", "rewriting"}
 CLEANUP_LEASE_NAME = "history"
 CLEANUP_LEASE_MINUTES = 5
+STALE_RUN_MINUTES = 30
 
 
 class Store:
@@ -113,21 +114,43 @@ class Store:
                 (CLEANUP_LEASE_NAME,),
             ).fetchone()
             rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
+            stale_cutoff = db.execute(
+                "SELECT datetime('now', ?)", (f"-{STALE_RUN_MINUTES} minutes",)
+            ).fetchone()[0]
             if lease and db.execute(
                 "SELECT datetime('now', ?)", (f"-{CLEANUP_LEASE_MINUTES} minutes",)
             ).fetchone()[0] <= lease["acquired_at"]:
                 raise RuntimeError("history cleanup is already active")
-            if any(row["state"] in HISTORY_BLOCKING_STATES for row in rows):
+            if any(
+                row["state"] in HISTORY_BLOCKING_STATES
+                or (row["state"] in ACTIVE_STATES and row["updated_at"] >= stale_cutoff)
+                for row in rows
+            ):
                 raise RuntimeError("cannot clear history while active runs exist")
             db.execute(
                 """INSERT INTO cleanup_leases(name, owner, acquired_at) VALUES (?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(name) DO UPDATE SET owner=excluded.owner, acquired_at=CURRENT_TIMESTAMP""",
                 (CLEANUP_LEASE_NAME, owner),
             )
-            runs = [self._run(row) for row in rows]
-            if runs:
-                db.execute("UPDATE daily_runs SET state='cleaning', updated_at=CURRENT_TIMESTAMP")
-        return runs
+            if rows:
+                for row in rows:
+                    article = None
+                    try:
+                        article = json.loads(row["article"]) if row["article"] else None
+                    except json.JSONDecodeError:
+                        pass
+                    if isinstance(article, dict) and article.get("cover_path"):
+                        db.execute(
+                            """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                               ON CONFLICT(run_id) DO NOTHING""",
+                            (row["id"], article["cover_path"]),
+                        )
+                    db.execute("DELETE FROM run_events WHERE run_id=?", (row["id"],))
+                db.execute(
+                    "UPDATE daily_runs SET state='cleaning', article=NULL, updated_at=CURRENT_TIMESTAMP"
+                )
+            cleaned_rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
+        return [self._run(row) for row in cleaned_rows]
 
     def require_cleanup_lease(self, owner: str) -> None:
         with closing(self._connect()) as db, db:

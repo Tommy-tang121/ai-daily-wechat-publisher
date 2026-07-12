@@ -10,11 +10,16 @@ from .daily_run import PublicationUncertainError
 
 def _payload(run):
     if is_dataclass(run):
-        return asdict(run)
-    return {
-        key: getattr(run, key, None)
-        for key in ("id", "state", "media_id", "article", "error", "owner")
-    }
+        payload = asdict(run)
+    else:
+        payload = {
+            key: getattr(run, key, None)
+            for key in ("id", "state", "media_id", "article", "error", "owner")
+        }
+    if payload.get("state") == "cleaning":
+        payload["article"] = None
+        payload["media_id"] = ""
+    return payload
 
 
 def create_app(runner, settings=None, tasks=None):
