@@ -20,7 +20,10 @@ class DailyRun:
         self.cleanup = cleanup
 
     def get(self, run_id: str):
-        return self._recover_stale_publication(self.store.get(run_id))
+        run = self.store.get(run_id)
+        if run.state == "finalizing":
+            return self._finish_finalization(run)
+        return self._recover_stale_publication(run)
 
     def events(self, run_id: str):
         return self.store.events(run_id)
@@ -54,30 +57,32 @@ class DailyRun:
 
     @staticmethod
     def _published_response(run):
-        return replace(run, state="published", owner=False, article=None, error="")
+        return replace(run, state="published", owner=False, media_id="", article=None, error="")
+
+    def _finish_pending_cover_cleanup(self, run, stage: str) -> bool:
+        article = self.store.pending_cover_cleanup(run.id)
+        if not article:
+            return True
+        if not self.cleanup:
+            return False
+        try:
+            self.cleanup(article)
+        except Exception as exc:
+            logger.warning("run=%s stage=%s error=%s", run.id, stage, type(exc).__name__)
+            return False
+        self.store.clear_pending_cover_cleanup(run.id)
+        return True
 
     def _finish_finalization(self, run):
         if run.state != "finalizing":
             raise InvalidTransition(f"cannot finalize {run.state}")
-        try:
-            if self.cleanup and run.article:
-                self.cleanup(run.article)
-        except Exception as exc:
-            logger.warning("run=%s stage=cleanup_failed error=%s", run.id, type(exc).__name__)
+        if not self._finish_pending_cover_cleanup(run, "finalization_cleanup_failed"):
             return self._published_response(run)
         self.store.discard_if_state(run.id, "finalizing")
         return self._published_response(run)
 
     def _finish_uncertain_cleanup(self, run):
-        article = self.store.pending_cover_cleanup(run.id)
-        if not article or not self.cleanup:
-            return run
-        try:
-            self.cleanup(article)
-        except Exception as exc:
-            logger.warning("run=%s stage=uncertain_cleanup_failed error=%s", run.id, type(exc).__name__)
-            return run
-        self.store.clear_pending_cover_cleanup(run.id)
+        self._finish_pending_cover_cleanup(run, "uncertain_cleanup_failed")
         return self.store.get(run.id)
 
     def _mark_publication_uncertain(self, run, error: str):

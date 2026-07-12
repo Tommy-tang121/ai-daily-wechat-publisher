@@ -130,10 +130,10 @@ class WorkflowTests(unittest.TestCase):
         published = runner.publish("2026-07-10")
 
         self.assertEqual(len(publisher_calls), 1)
-        self.assertEqual(cleanup_calls, publisher_calls)
+        self.assertEqual(cleanup_calls, [{"cover_path": "C:/covers/2026-07-10.png"}])
         self.assertEqual(cleanup_calls[0]["cover_path"], "C:/covers/2026-07-10.png")
         self.assertEqual(published.state, "published")
-        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(published.media_id, "")
         self.assertIsNone(published.article)
         with self.assertRaises(KeyError):
             runner.get(ready.id)
@@ -204,7 +204,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(cleanup_calls, [str(cover_path)])
         self.assertFalse(cover_path.exists())
         self.assertEqual(published.state, "published")
-        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(published.media_id, "")
         self.assertIsNone(published.article)
         with self.assertRaises(KeyError):
             runner.get(ready.id)
@@ -218,12 +218,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotEqual(fresh.id, ready.id)
         self.assertEqual(fresh.state, "scraping")
 
-    def test_successful_publish_keeps_finalization_until_cover_cleanup_recovers(self):
+    def test_successful_publish_hides_finalization_content_until_cover_cleanup_recovers(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         cleanup_calls = []
 
         def cleanup(article):
-            cleanup_calls.append(article["markdown"])
+            cleanup_calls.append(article["cover_path"])
             if len(cleanup_calls) == 1:
                 raise RuntimeError("cover cleanup unavailable")
 
@@ -232,6 +232,7 @@ class WorkflowTests(unittest.TestCase):
             store := Store(Path(self.tmp.name) / "daily.db"),
             Content(source, self.valid_llm),
             lambda article: publisher_calls.append(article.copy()) or "draft-1",
+            cover=lambda article, settings: {"cover_path": "C:/covers/2026-07-10.png"},
             cleanup=cleanup,
         )
         ready = runner.prepare("2026-07-10", {})
@@ -239,16 +240,18 @@ class WorkflowTests(unittest.TestCase):
         published = runner.publish("2026-07-10")
 
         self.assertEqual(published.state, "published")
-        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(published.media_id, "")
         self.assertIsNone(published.article)
-        retained = runner.get(ready.id)
+        retained = store.get(ready.id)
         self.assertEqual(retained.state, "finalizing")
-        self.assertEqual(retained.media_id, "draft-1")
-        self.assertIsNotNone(retained.article)
+        self.assertEqual(retained.media_id, "")
+        self.assertIsNone(retained.article)
+        self.assertEqual(store.events(ready.id), [])
 
-        recovered = runner.publish("2026-07-10")
+        recovered = runner.get(ready.id)
 
         self.assertEqual(recovered.state, "published")
+        self.assertEqual(recovered.media_id, "")
         self.assertIsNone(recovered.article)
         self.assertEqual(len(publisher_calls), 1)
         self.assertEqual(len(cleanup_calls), 2)
@@ -269,13 +272,19 @@ class WorkflowTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "active"):
                     runner.clear_history(deleted.append)
 
-        runner = DailyRun(store, Content(source, self.valid_llm), lambda article: "draft-1", cleanup=cleanup)
+        runner = DailyRun(
+            store,
+            Content(source, self.valid_llm),
+            lambda article: "draft-1",
+            cover=lambda article, settings: {"cover_path": "C:/covers/2026-07-10.png"},
+            cleanup=cleanup,
+        )
         ready = runner.prepare(date, {})
 
         published = runner.publish(date)
 
         self.assertEqual(published.state, "published")
-        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(published.media_id, "")
         self.assertIsNone(published.article)
         with self.assertRaises(KeyError):
             runner.get(ready.id)
@@ -296,9 +305,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(recovered.state, "finalizing")
         self.assertFalse(recovered.owner)
         self.assertEqual(published.state, "published")
-        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(published.media_id, "")
         self.assertEqual(calls, [])
-        self.assertEqual(len(cleanup), 1)
+        self.assertEqual(len(cleanup), 0)
         with self.assertRaises(KeyError):
             runner.get(ready.id)
 
@@ -574,7 +583,7 @@ class WorkflowTests(unittest.TestCase):
 
         published = DailyRun(store, None, lambda article: captured.update(article) or "draft-1").publish("2026-07-10")
 
-        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(published.media_id, "")
         self.assertEqual(captured.get("title"), "AI 行业热点新闻 | 2026-07-10")
 
     def test_get_reads_the_persisted_run(self):

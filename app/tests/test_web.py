@@ -169,6 +169,41 @@ class WebTests(unittest.TestCase):
         self.assertNotIn("cover_path", payload)
         self.assertEqual(cleaned, ["C:/covers/2026-07-10.png"])
 
+    def test_read_hides_a_finalizing_run_while_retrying_its_cover_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = Store(Path(temp) / "daily.db")
+            run = store.claim("2026-07-10")
+            store.transition(run.id, "scraping")
+            store.transition(run.id, "rewriting")
+            store.save_article(
+                run.id,
+                {"date": run.date, "markdown": "article", "cover_path": "C:/covers/2026-07-10.png"},
+            )
+            store.record_event(run.id, "done", "complete", "ready")
+            store.transition(run.id, "publishing")
+            store.mark_finalizing(run.id, "draft-1")
+            cleanup_calls = []
+
+            def cleanup(article):
+                cleanup_calls.append(article["cover_path"])
+                if len(cleanup_calls) == 1:
+                    raise RuntimeError("cover locked")
+
+            runner = DailyRun(store, None, None, cleanup=cleanup)
+            runner.publish(run.date)
+            response = create_app(runner).test_client().get(f"/api/runs/{run.id}")
+
+            with self.assertRaises(KeyError):
+                store.get(run.id)
+
+        payload = response.get_json()
+        self.assertEqual(payload["state"], "published")
+        self.assertIsNone(payload["article"])
+        self.assertEqual(payload["media_id"], "")
+        self.assertEqual(payload["events"], [])
+        self.assertNotIn("cover_path", payload)
+        self.assertEqual(cleanup_calls, ["C:/covers/2026-07-10.png", "C:/covers/2026-07-10.png"])
+
     def test_settings_api_reads_and_saves_the_same_runner_settings(self):
         client = create_app(FakeRunner()).test_client()
         self.assertEqual(client.get("/api/config").get_json()["max_words"], 150)

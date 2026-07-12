@@ -218,11 +218,25 @@ class Store:
         if not media_id:
             raise ValueError("missing media_id")
         with closing(self._connect()) as db, db:
-            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row or row["state"] != "publishing":
                 raise InvalidTransition("only publishing runs can finalize")
-            db.execute("UPDATE daily_runs SET state='finalizing', media_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                       (media_id, run_id))
+            article = json.loads(row["article"]) if row["article"] else {}
+            cover_path = article.get("cover_path") if isinstance(article, dict) else None
+            if cover_path:
+                db.execute(
+                    """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                       ON CONFLICT(run_id) DO UPDATE SET cover_path=excluded.cover_path""",
+                    (run_id, cover_path),
+                )
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute(
+                """UPDATE daily_runs
+                   SET state='finalizing', article=NULL, media_id='', error='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='publishing'""",
+                (run_id,),
+            )
         return self.get(run_id)
 
     def mark_publication_uncertain(self, run_id: str, error: str) -> Run:
