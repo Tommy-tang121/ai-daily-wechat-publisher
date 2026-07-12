@@ -27,8 +27,8 @@ class FakeRunner:
         self.values = {"title": "Daily", "max_words": 150}
         self.start_calls = []
 
-    def start(self, date, settings, retry=False, fresh=False):
-        self.start_calls.append({"date": date, "retry": retry, "fresh": fresh})
+    def start(self, date, settings, retry=False, fresh=False, resolve_uncertain=False):
+        self.start_calls.append({"date": date, "retry": retry, "fresh": fresh, "resolve_uncertain": resolve_uncertain})
         return self.run
 
     def execute(self, run_id, date, settings):
@@ -54,8 +54,16 @@ class FakeRunner:
 
 
 class FailingRunner:
-    def start(self, date, settings, retry=False, fresh=False):
+    def start(self, date, settings, retry=False, fresh=False, resolve_uncertain=False):
         raise RuntimeError("source unavailable")
+
+
+class ConfirmationRunner(FakeRunner):
+    def start(self, date, settings, retry=False, fresh=False, resolve_uncertain=False):
+        run = super().start(date, settings, retry, fresh, resolve_uncertain)
+        if not resolve_uncertain:
+            raise RuntimeError("发布结果待确认：请先在微信草稿箱核对")
+        return run
 
 
 class FakeTasks:
@@ -102,6 +110,28 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.get_json()["id"], "run-1")
         self.assertEqual(response.get_json()["state"], "scraping")
         self.assertTrue(runner.start_calls[0]["fresh"])
+        self.assertTrue(runner.executed.wait(1))
+
+    def test_prepare_requires_explicit_confirmation_before_replacing_an_uncertain_publication(self):
+        runner = ConfirmationRunner()
+        client = create_app(runner).test_client()
+
+        rejected = client.post("/api/runs", json={"date": "2026-07-10"})
+
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(rejected.get_json()["state"], "publication_uncertain")
+        self.assertIn("发布结果待确认", rejected.get_json()["error"])
+        self.assertFalse(runner.executed.is_set())
+
+        text_flag = client.post("/api/runs", json={"date": "2026-07-10", "resolve_uncertain": "false"})
+
+        self.assertEqual(text_flag.status_code, 409)
+        self.assertFalse(runner.start_calls[-1]["resolve_uncertain"])
+
+        confirmed = client.post("/api/runs", json={"date": "2026-07-10", "resolve_uncertain": True})
+
+        self.assertEqual(confirmed.status_code, 202)
+        self.assertTrue(runner.start_calls[-1]["resolve_uncertain"])
         self.assertTrue(runner.executed.wait(1))
 
     def test_read_returns_persisted_events_for_the_same_run(self):
@@ -189,3 +219,11 @@ class WebTests(unittest.TestCase):
         self.assertIn(b'state.runId = "";', script)
         self.assertIn(b'localStorage.removeItem("ai-daily-run-id");', script)
         self.assertIn(b'setStatus("idle",', script)
+
+    def test_browser_marks_uncertain_publication_and_requests_confirmation(self):
+        script = create_app(FakeRunner()).test_client().get("/static/app.js").data
+
+        self.assertIn(b'run.state === "publication_uncertain"', script)
+        self.assertIn("发布结果待确认".encode(), script)
+        self.assertIn(b"window.confirm(", script)
+        self.assertIn(b"resolve_uncertain: resolveUncertain", script)

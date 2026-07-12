@@ -38,7 +38,7 @@ def main():
         settings = runner.settings()
         settings["title"] = f"AI 行业热点新闻 | {run_date}"
         run = runner.prepare(run_date, settings, retry=True)
-        if not args.preview:
+        if not args.preview and run.state in {"ready", "finalizing"}:
             runner.publish(run.date)
         return
     web = create_app(runner, tasks=WindowsTasks(app_dir / "scripts" / "run_scheduled.bat"))

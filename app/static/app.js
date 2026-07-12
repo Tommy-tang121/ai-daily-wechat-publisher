@@ -215,6 +215,13 @@
       $("errText").textContent = run.error || "处理失败";
       $("cornerBadge").textContent = "FAIL";
       setStatus("failed", "运行失败", run.error || "请检查错误后重新抓取");
+    } else if (run.state === "publication_uncertain") {
+      renderArticle(null);
+      renderCover(null);
+      $("btnPublish").disabled = true;
+      $("cornerBadge").textContent = "CHECK";
+      $("fetchHint").textContent = "发布结果待确认：请先在微信草稿箱核对";
+      setStatus("failed", "发布结果待确认", "请先核对微信草稿箱；确认后再次点击抓取，才会重新生成。");
     } else if (active) {
       const latest = run.events?.at(-1)?.message || "正在处理";
       $("cornerBadge").textContent = "BUSY";
@@ -340,6 +347,8 @@
     if (!state.selectedDate) return;
     stopPolling();
     try {
+      const resolveUncertain = state.run?.state === "publication_uncertain" && state.run.date === state.selectedDate;
+      if (resolveUncertain && !window.confirm("请先确认微信草稿箱中没有这篇草稿。确认后才会重新生成，是否继续？")) return;
       await saveSettings({
         title: $("inputTitle").value,
         author: $("inputAuthor").value,
@@ -348,7 +357,7 @@
       const run = await requestJson("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: state.selectedDate, retry: true }),
+        body: JSON.stringify({ date: state.selectedDate, retry: true, resolve_uncertain: resolveUncertain }),
       });
       renderRun(run);
       pollRun();

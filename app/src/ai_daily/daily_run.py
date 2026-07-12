@@ -68,11 +68,30 @@ class DailyRun:
         self.store.discard_if_state(run.id, "finalizing")
         return self._published_response(run)
 
-    def _claim_fresh(self, date: str):
+    def _recover_stale_publication(self, run):
+        """Stop a possibly-completed remote publish without ever retrying it."""
+        if run.state != "publishing" or not self.store.stale_publishing(run.id, minutes=30):
+            return run
+        try:
+            if self.cleanup and run.article:
+                self.cleanup(run.article)
+        except Exception as exc:
+            logger.warning("run=%s stage=uncertain_cleanup_failed error=%s", run.id, type(exc).__name__)
+            return self.store.get(run.id)
+        try:
+            return self.store.mark_publication_uncertain(
+                run.id,
+                "发布结果待确认：请先在微信草稿箱核对后再重新生成",
+            )
+        except InvalidTransition:
+            return self.store.get(run.id)
+
+    def _claim_fresh(self, date: str, resolve_uncertain: bool = False):
         while True:
             run = self.store.claim(date)
             if run.owner:
                 return run
+            run = self._recover_stale_publication(run)
             if run.state == "finalizing":
                 completed = self._finish_finalization(run)
                 try:
@@ -82,6 +101,11 @@ class DailyRun:
                 return completed
             if run.state == "published":
                 raise RuntimeError("legacy published runs require cleanup-history before fresh generation")
+            if run.state == "publication_uncertain":
+                if not resolve_uncertain:
+                    raise RuntimeError("发布结果待确认：请先在微信草稿箱核对后再重新生成")
+                self.store.discard_if_state(run.id, "publication_uncertain")
+                continue
             if run.state not in {"ready", "failed"}:
                 return run
             if self.cleanup and run.article:
@@ -89,9 +113,18 @@ class DailyRun:
             self.store.discard_if_state(run.id, run.state)
             continue
 
-    def start(self, date: str, settings: dict, retry: bool = False, fresh: bool = False):
-        run = self._claim_fresh(date) if fresh else self.store.claim(date)
+    def start(
+        self,
+        date: str,
+        settings: dict,
+        retry: bool = False,
+        fresh: bool = False,
+        resolve_uncertain: bool = False,
+    ):
+        run = self._claim_fresh(date, resolve_uncertain) if fresh else self.store.claim(date)
         if not fresh:
+            if retry:
+                run = self._recover_stale_publication(run)
             if retry and run.state == "failed":
                 run = self.store.retry(run.id)
             elif retry:
@@ -148,6 +181,8 @@ class DailyRun:
             return run
         if run.state == "finalizing":
             return self._finish_finalization(run)
+        if run.state == "publication_uncertain":
+            return run
         if run.state != "ready":
             raise InvalidTransition(f"cannot publish {run.state}")
         self.store.transition(run.id, "publishing")
@@ -155,11 +190,15 @@ class DailyRun:
         try:
             article = {**run.article, "title": run.article.get("title", f"AI 行业热点新闻 | {run.date}")}
             media_id = self.publisher(article)
-            published = self.store.mark_finalizing(run.id, media_id)
         except Exception as exc:
             self.store.transition(run.id, "ready", str(exc))
             self.store.record_event(run.id, "error", "error", str(exc))
             logger.error("run=%s stage=failed error=%s", run.id, type(exc).__name__)
+            raise
+        try:
+            published = self.store.mark_finalizing(run.id, media_id)
+        except Exception as exc:
+            logger.error("run=%s stage=receipt_persist_failed error=%s", run.id, type(exc).__name__)
             raise
         published = self._finish_finalization(published)
         logger.info("run=%s stage=published", run.id)

@@ -302,6 +302,66 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             runner.get(ready.id)
 
+    def test_stale_publishing_stops_as_uncertain_without_republishing(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        publisher_calls = []
+        cleanup_calls = []
+        run = store.claim("2026-07-10")
+        store.transition(run.id, "scraping")
+        store.transition(run.id, "rewriting")
+        ready = store.save_article(
+            run.id,
+            {"date": "2026-07-10", "markdown": "article", "items": [], "cover_path": "C:/covers/2026-07-10.png"},
+        )
+        store.transition(ready.id, "publishing")
+        with closing(store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (ready.id,))
+        runner = DailyRun(
+            store,
+            None,
+            lambda article: publisher_calls.append(article) or "new-draft",
+            cleanup=lambda article: cleanup_calls.append(article["cover_path"]),
+        )
+
+        scheduled = runner.prepare("2026-07-10", {}, retry=True)
+        publish_result = runner.publish("2026-07-10")
+
+        self.assertEqual(scheduled.state, "publication_uncertain")
+        self.assertEqual(publish_result.state, "publication_uncertain")
+        self.assertEqual(publisher_calls, [])
+        self.assertEqual(cleanup_calls, ["C:/covers/2026-07-10.png"])
+        retained = store.get(ready.id)
+        self.assertEqual(retained.state, "publication_uncertain")
+        self.assertIsNone(retained.article)
+        self.assertEqual(store.events(ready.id), [])
+
+        with self.assertRaisesRegex(RuntimeError, "确认"):
+            runner.start("2026-07-10", {}, fresh=True)
+        self.assertEqual(store.get(ready.id).state, "publication_uncertain")
+
+        fresh = runner.start("2026-07-10", {}, fresh=True, resolve_uncertain=True)
+
+        self.assertTrue(fresh.owner)
+        self.assertEqual(fresh.state, "scraping")
+        with self.assertRaises(KeyError):
+            store.get(ready.id)
+
+    def test_cleanup_history_refuses_a_publication_uncertain_run(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        run = store.claim("2026-07-10")
+        store.transition(run.id, "scraping")
+        store.transition(run.id, "rewriting")
+        store.save_article(run.id, {"date": "2026-07-10", "markdown": "article", "items": []})
+        store.transition(run.id, "publishing")
+        store.mark_publication_uncertain(run.id, "发布结果待确认")
+        deleted = []
+
+        with self.assertRaisesRegex(RuntimeError, "active"):
+            DailyRun(store, None, None).clear_history(deleted.append)
+
+        self.assertEqual(deleted, [])
+        self.assertEqual(store.get(run.id).state, "publication_uncertain")
+
     def test_clear_history_deletes_every_draft_before_removing_local_runs(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         first = self._published_run(store, "2026-07-10", "draft-1")

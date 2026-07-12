@@ -106,3 +106,43 @@ class CliTests(unittest.TestCase):
 
         self.assertTrue(captured["retry"])
         self.assertEqual(captured["settings"].get("title"), f"AI 行业热点新闻 | {date.today().isoformat()}")
+
+    def test_scheduled_daily_does_not_publish_an_uncertain_publication(self):
+        class Runner:
+            def settings(self):
+                return {"title": "stale title", "max_words": 150}
+
+            def prepare(self, date_value, settings, retry=False):
+                return type("Run", (), {"date": date_value, "state": "publication_uncertain"})()
+
+            def publish(self, date_value):
+                raise AssertionError("uncertain publication must not call publisher")
+
+        with (
+            patch.object(cli, "build_runner", return_value=Runner()),
+            patch.object(sys, "argv", ["ai-daily", "daily"]),
+        ):
+            cli.main()
+
+    def test_scheduled_daily_finishes_pending_finalization_cleanup(self):
+        class Runner:
+            def __init__(self):
+                self.publish_calls = []
+
+            def settings(self):
+                return {"title": "stale title", "max_words": 150}
+
+            def prepare(self, date_value, settings, retry=False):
+                return type("Run", (), {"date": date_value, "state": "finalizing"})()
+
+            def publish(self, date_value):
+                self.publish_calls.append(date_value)
+
+        runner = Runner()
+        with (
+            patch.object(cli, "build_runner", return_value=runner),
+            patch.object(sys, "argv", ["ai-daily", "daily"]),
+        ):
+            cli.main()
+
+        self.assertEqual(len(runner.publish_calls), 1)

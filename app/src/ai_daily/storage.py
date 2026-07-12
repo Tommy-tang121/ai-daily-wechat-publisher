@@ -28,13 +28,15 @@ ALLOWED = {
     "ready": {"publishing", "failed"},
     "publishing": {"finalizing", "published", "ready", "failed"},
     "finalizing": set(),
+    "publication_uncertain": set(),
     "published": set(),
     "failed": set(),
     "cleaning": set(),
 }
 
 ACTIVE_STATES = {"queued", "scraping", "rewriting", "publishing"}
-HISTORY_BLOCKING_STATES = ACTIVE_STATES | {"finalizing"}
+HISTORY_BLOCKING_STATES = ACTIVE_STATES | {"finalizing", "publication_uncertain"}
+RECLAIMABLE_STATES = {"queued", "scraping", "rewriting"}
 CLEANUP_LEASE_NAME = "history"
 CLEANUP_LEASE_MINUTES = 5
 
@@ -218,6 +220,30 @@ class Store:
                        (media_id, run_id))
         return self.get(run_id)
 
+    def mark_publication_uncertain(self, run_id: str, error: str) -> Run:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != "publishing":
+                raise InvalidTransition("only publishing runs can become uncertain")
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute(
+                """UPDATE daily_runs
+                   SET state='publication_uncertain', article=NULL, media_id='', error=?, updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='publishing'""",
+                (error[:500], run_id),
+            )
+        return self.get(run_id)
+
+    def stale_publishing(self, run_id: str, minutes: int) -> Run | None:
+        with closing(self._connect()) as db:
+            row = db.execute(
+                """SELECT * FROM daily_runs
+                   WHERE id=? AND state='publishing' AND updated_at < datetime('now', ?)""",
+                (run_id, f"-{minutes} minutes"),
+            ).fetchone()
+        return self._run(row) if row else None
+
     def retry(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
             row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
@@ -234,7 +260,7 @@ class Store:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row:
                 raise KeyError(run_id)
-            if row["state"] not in ACTIVE_STATES:
+            if row["state"] not in RECLAIMABLE_STATES:
                 return self._run(row)
             result = db.execute(
                 """UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP

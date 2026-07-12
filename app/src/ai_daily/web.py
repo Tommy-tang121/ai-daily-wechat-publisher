@@ -94,8 +94,16 @@ def create_app(runner, settings=None, tasks=None):
             return jsonify(error="请选择日期"), 400
         try:
             run_settings = current_settings()
-            run = runner.start(date, run_settings, retry=bool(body.get("retry")), fresh=True)
+            run = runner.start(
+                date,
+                run_settings,
+                retry=bool(body.get("retry")),
+                fresh=True,
+                resolve_uncertain=body.get("resolve_uncertain") is True,
+            )
         except Exception as exc:
+            if "发布结果待确认" in str(exc):
+                return jsonify(error=str(exc), state="publication_uncertain"), 409
             return jsonify(error=str(exc)), 502
         if getattr(run, "owner", False):
             Thread(target=runner.execute, args=(run.id, date, run_settings), daemon=True).start()

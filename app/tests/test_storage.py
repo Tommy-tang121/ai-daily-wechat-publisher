@@ -224,3 +224,33 @@ class StoreTests(unittest.TestCase):
 
         self.assertTrue(reclaimed.owner)
         self.assertEqual(reclaimed.state, "queued")
+
+    def test_stale_publishing_run_is_not_requeued(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article"})
+        self.store.transition(run.id, "publishing")
+        with closing(self.store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+
+        reclaimed = self.store.reclaim_stale(run.id, minutes=30)
+
+        self.assertFalse(reclaimed.owner)
+        self.assertEqual(reclaimed.state, "publishing")
+
+    def test_publication_uncertain_discards_article_receipt_and_events(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        self.store.transition(run.id, "rewriting")
+        self.store.save_article(run.id, {"markdown": "article", "cover_path": "C:/covers/2026-07-10.png"})
+        self.store.record_event(run.id, "done", "complete", "ready")
+        self.store.transition(run.id, "publishing")
+
+        uncertain = self.store.mark_publication_uncertain(run.id, "发布结果待确认")
+
+        self.assertEqual(uncertain.state, "publication_uncertain")
+        self.assertEqual(uncertain.error, "发布结果待确认")
+        self.assertEqual(uncertain.media_id, "")
+        self.assertIsNone(uncertain.article)
+        self.assertEqual(self.store.events(run.id), [])
