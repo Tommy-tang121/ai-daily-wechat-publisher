@@ -314,7 +314,16 @@ class Store:
             if not row or row["state"] != "failed":
                 raise InvalidTransition("only failed runs can be retried")
             state = "ready" if row["article"] else "queued"
-            db.execute("UPDATE daily_runs SET state=?, error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (state, run_id))
+            updated = db.execute(
+                """UPDATE daily_runs SET state=?, error='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='failed'""",
+                (state, run_id),
+            )
+            if not updated.rowcount:
+                current = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+                if not current:
+                    raise KeyError(run_id)
+                return self._run(current)
         run = self.get(run_id)
         return Run(run.id, run.date, run.state, state == "queued", run.media_id, run.article, run.error)
 

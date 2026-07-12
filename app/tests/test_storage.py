@@ -158,6 +158,40 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(retried.state, "queued")
         self.assertTrue(retried.owner)
 
+    def test_retry_cannot_replace_a_cleanup_state_changed_after_its_read(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "failed", "temporary error")
+        original_connect = self.store._connect
+        concurrent_store = Store(self.temp)
+
+        class InterleavingConnection:
+            def __init__(self, connection):
+                self.connection = connection
+                self.started_cleanup = False
+
+            def __enter__(self):
+                self.connection.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.connection.__exit__(*args)
+
+            def close(self):
+                self.connection.close()
+
+            def execute(self, sql, parameters=()):
+                if sql.startswith("UPDATE daily_runs SET state=?, error='', updated_at=") and not self.started_cleanup:
+                    self.started_cleanup = True
+                    concurrent_store.begin_cleanup("cleanup-owner")
+                return self.connection.execute(sql, parameters)
+
+        with patch.object(self.store, "_connect", side_effect=lambda: InterleavingConnection(original_connect())):
+            retried = self.store.retry(run.id)
+
+        self.assertEqual(retried.state, "cleaning")
+        self.assertFalse(retried.owner)
+        self.assertEqual(self.store.get(run.id).state, "cleaning")
+
     def test_events_are_persisted_in_the_order_they_happened(self):
         run = self.store.claim("2026-07-10")
         self.store.record_event(run.id, "scraping", "progress", "Fetching sources")
