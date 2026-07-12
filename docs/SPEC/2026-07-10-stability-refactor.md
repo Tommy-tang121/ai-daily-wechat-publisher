@@ -2,7 +2,7 @@
 
 ## 架构
 
-Flask + 原生 JavaScript 只负责页面与 API。`DailyRun` 是网页与 Windows 计划任务共用的唯一流程入口；SQLite WAL 保存设置、运行状态、文章、封面地址、事件和微信草稿回执。
+Flask + 原生 JavaScript 只负责页面与 API。`DailyRun` 是网页与 Windows 计划任务共用的唯一流程入口；SQLite WAL 持久保存设置和计划时间，只临时保存处理中的运行、待发布文章、封面地址和事件。微信草稿创建成功后会删除这些运行数据，不保留草稿回执或已发布归档。
 
 ```text
 网页 / 计划任务 -> CLI / Web -> DailyRun -> SQLite
@@ -14,13 +14,13 @@ Flask + 原生 JavaScript 只负责页面与 API。`DailyRun` 是网页与 Windo
 ## 状态
 
 ```text
-queued -> scraping -> rewriting -> ready -> publishing -> published
+queued -> scraping -> rewriting -> ready -> publishing -> published -> 清除本地运行、文章、事件和封面
                           \-> failed               \-> failed
 ```
 
-- 日期唯一：同一天不重复生成或发布。
-- `ready` 表示文章和封面都已持久化，但尚未发布。
-- `published` 必须有非空微信草稿回执。
+- 日期唯一：同一天处理中的、`ready` 或失败运行不会重复生成或发布；网页手动选择日期会以 fresh 模式重新生成可替换的旧内容。
+- `ready` 表示文章和封面已临时保留，尚未发布。
+- `published` 必须先获得非空微信草稿回执；随后立即清除本地文章、事件、封面和运行记录。
 - 内容阶段失败可明确重试；已有文章的草稿创建失败会保留在 `ready`，只重试发布。超过 30 分钟的排队或处理中任务可被计划任务安全接管。
 
 ## 内容
@@ -36,6 +36,7 @@ queued -> scraping -> rewriting -> ready -> publishing -> published
 - 页面保存时间时更新该任务，并在新任务成功后删除旧检查任务。
 - Windows 任务定义失败后每 15 分钟重试，最多 3 次。
 - 任务在当前 Windows 用户上下文运行；电脑关闭或用户退出登录时无法执行。
+- 设置和保存的计划时间不随成功发布后的运行清理而删除。
 
 ## 安全
 

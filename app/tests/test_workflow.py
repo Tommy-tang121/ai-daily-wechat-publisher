@@ -138,6 +138,81 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             runner.get(ready.id)
 
+    def test_ephemeral_daily_lifecycle_keeps_ready_content_then_clears_it_after_publish(self):
+        date = "2026-07-10"
+        store = Store(Path(self.tmp.name) / "daily.db")
+        cover_path = Path(self.tmp.name) / "cover.png"
+        publisher_calls = []
+        cleanup_calls = []
+
+        def source(_date):
+            return [
+                {
+                    "title": f"Source {index}",
+                    "summary": "Summary",
+                    "source_url": f"https://origin/{index}",
+                    "source": "AIHot",
+                    "category": "news",
+                }
+                for index in range(11)
+            ]
+
+        def llm(messages):
+            payload = json.loads(messages[1]["content"])
+            if "sources" in payload:
+                return json.dumps({
+                    "items": [
+                        {"title": f"Edited {item['title']}", "body": "Rewritten"}
+                        for item in payload["sources"]
+                    ]
+                })
+            return json.dumps({"opening": "Opening", "closing": "Closing"})
+
+        def cover(article, settings):
+            cover_path.write_bytes(b"temporary cover")
+            return {"cover_path": str(cover_path)}
+
+        def cleanup(article):
+            cleanup_calls.append(article["cover_path"])
+            Path(article["cover_path"]).unlink()
+
+        def publish(article):
+            publisher_calls.append(article.copy())
+            return "draft-1"
+
+        runner = DailyRun(store, Content(source, llm), publish, cover=cover, cleanup=cleanup)
+        ready = runner.prepare(date, {})
+        retained = runner.get(ready.id)
+
+        self.assertEqual(retained.state, "ready")
+        self.assertEqual(len(retained.article["items"]), 11)
+        self.assertTrue(cover_path.is_file())
+        self.assertIn("**\u4eca\u65e5\u89c2\u5bdf**", retained.article["markdown"])
+        self.assertIn("**\u5c0f\u7f16\u77ed\u8bc4**", retained.article["markdown"])
+        self.assertIn("\u6570\u636e\u6765\u6e90\uff1ahttps://aihot.virxact.com/", retained.article["markdown"])
+        self.assertGreater(len(runner.events(ready.id)), 0)
+        self.assertEqual(publisher_calls, [])
+
+        published = runner.publish(date)
+
+        self.assertEqual(publisher_calls, [retained.article])
+        self.assertEqual(cleanup_calls, [str(cover_path)])
+        self.assertFalse(cover_path.exists())
+        self.assertEqual(published.state, "published")
+        self.assertEqual(published.media_id, "draft-1")
+        self.assertIsNone(published.article)
+        with self.assertRaises(KeyError):
+            runner.get(ready.id)
+        with closing(store._connect()) as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM daily_runs WHERE id=?", (ready.id,)).fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (ready.id,)).fetchone())
+
+        fresh = runner.start(date, {}, fresh=True)
+
+        self.assertTrue(fresh.owner)
+        self.assertNotEqual(fresh.id, ready.id)
+        self.assertEqual(fresh.state, "scraping")
+
     def test_successful_publish_discards_the_run_when_cleanup_fails(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         cleanup = lambda article: (_ for _ in ()).throw(RuntimeError("cover cleanup unavailable"))
