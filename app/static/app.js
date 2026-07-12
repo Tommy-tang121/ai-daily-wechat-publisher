@@ -18,7 +18,11 @@
   async function requestJson(url, options) {
     const response = await fetch(url, options);
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "请求失败");
+    if (!response.ok) {
+      const error = new Error(payload.error || "请求失败");
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   }
 
@@ -247,13 +251,30 @@
     const runId = localStorage.getItem("ai-daily-run-id");
     if (!runId) return;
     state.runId = runId;
-    const run = await requestJson(`/api/runs/${encodeURIComponent(runId)}`);
-    state.selectedDate = run.date;
-    const restored = new Date(`${run.date}T00:00:00`);
-    renderCalendar(restored.getFullYear(), restored.getMonth());
-    renderRun(run);
-    if (["queued", "scraping", "rewriting", "publishing"].includes(run.state)) {
-      state.timer = window.setTimeout(pollRun, 1000);
+    try {
+      const run = await requestJson(`/api/runs/${encodeURIComponent(runId)}`);
+      state.selectedDate = run.date;
+      const restored = new Date(`${run.date}T00:00:00`);
+      renderCalendar(restored.getFullYear(), restored.getMonth());
+      renderRun(run);
+      if (["queued", "scraping", "rewriting", "publishing"].includes(run.state)) {
+        state.timer = window.setTimeout(pollRun, 1000);
+      }
+    } catch (error) {
+      if (error.status === 404) {
+        stopPolling();
+        state.run = null;
+        state.runId = "";
+        localStorage.removeItem("ai-daily-run-id");
+        renderArticle(null);
+        renderCover(null);
+        $("btnFetch").disabled = false;
+        $("btnPublish").disabled = true;
+        $("cornerTag").classList.remove("show");
+        setStatus("idle", "等待操作", "请选择日期后点击「抓取」开始。");
+        return;
+      }
+      throw error;
     }
   }
 

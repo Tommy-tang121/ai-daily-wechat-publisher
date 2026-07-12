@@ -80,6 +80,8 @@ class WeChatPublisher:
             delete_payload = delete_response.json()
         except (requests.RequestException, ValueError):
             raise RuntimeError("微信公众号删除草稿失败") from None
+        if isinstance(delete_payload, dict) and delete_payload.get("errcode") == 40007 and "invalid media_id" in str(delete_payload.get("errmsg", "")).lower():
+            return
         if not isinstance(delete_payload, dict) or delete_payload.get("errcode") != 0:
             code = delete_payload.get("errcode") if isinstance(delete_payload, dict) else None
             suffix = f"（错误码 {code}）" if code is not None else ""

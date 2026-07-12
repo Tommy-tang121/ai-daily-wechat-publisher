@@ -218,13 +218,20 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotEqual(fresh.id, ready.id)
         self.assertEqual(fresh.state, "scraping")
 
-    def test_successful_publish_discards_the_run_when_cleanup_fails(self):
+    def test_successful_publish_keeps_finalization_until_cover_cleanup_recovers(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        cleanup = lambda article: (_ for _ in ()).throw(RuntimeError("cover cleanup unavailable"))
+        cleanup_calls = []
+
+        def cleanup(article):
+            cleanup_calls.append(article["markdown"])
+            if len(cleanup_calls) == 1:
+                raise RuntimeError("cover cleanup unavailable")
+
+        publisher_calls = []
         runner = DailyRun(
-            Store(Path(self.tmp.name) / "daily.db"),
+            store := Store(Path(self.tmp.name) / "daily.db"),
             Content(source, self.valid_llm),
-            lambda article: "draft-1",
+            lambda article: publisher_calls.append(article.copy()) or "draft-1",
             cleanup=cleanup,
         )
         ready = runner.prepare("2026-07-10", {})
@@ -234,17 +241,36 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(published.state, "published")
         self.assertEqual(published.media_id, "draft-1")
         self.assertIsNone(published.article)
+        retained = runner.get(ready.id)
+        self.assertEqual(retained.state, "finalizing")
+        self.assertEqual(retained.media_id, "draft-1")
+        self.assertIsNotNone(retained.article)
+
+        recovered = runner.publish("2026-07-10")
+
+        self.assertEqual(recovered.state, "published")
+        self.assertIsNone(recovered.article)
+        self.assertEqual(len(publisher_calls), 1)
+        self.assertEqual(len(cleanup_calls), 2)
         with self.assertRaises(KeyError):
             runner.get(ready.id)
 
-    def test_successful_publish_returns_when_cleanup_starts_a_fresh_run(self):
+    def test_finalization_blocks_history_cleanup_after_remote_draft_succeeds(self):
         date = "2026-07-10"
         store = Store(Path(self.tmp.name) / "daily.db")
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        fresh_runs = []
-        cleanup = lambda article: fresh_runs.append(store.claim_fresh(date))
+        deleted = []
+        cleanup_started = False
+
+        def cleanup(article):
+            nonlocal cleanup_started
+            if not cleanup_started:
+                cleanup_started = True
+                with self.assertRaisesRegex(RuntimeError, "active"):
+                    runner.clear_history(deleted.append)
+
         runner = DailyRun(store, Content(source, self.valid_llm), lambda article: "draft-1", cleanup=cleanup)
-        old = runner.prepare(date, {})
+        ready = runner.prepare(date, {})
 
         published = runner.publish(date)
 
@@ -252,10 +278,29 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(published.media_id, "draft-1")
         self.assertIsNone(published.article)
         with self.assertRaises(KeyError):
-            runner.get(old.id)
-        self.assertEqual(len(fresh_runs), 1)
-        self.assertTrue(fresh_runs[0].owner)
-        self.assertEqual(store.get(fresh_runs[0].id).state, "queued")
+            runner.get(ready.id)
+        self.assertEqual(deleted, [])
+
+    def test_recovered_finalization_never_calls_the_publisher_again(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        calls = []
+        cleanup = []
+        runner = DailyRun(store, Content(lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}], self.valid_llm), lambda article: calls.append(article) or "new-draft", cleanup=lambda article: cleanup.append(article["markdown"]))
+        ready = runner.prepare("2026-07-10", {})
+        store.transition(ready.id, "publishing")
+        store.mark_finalizing(ready.id, "draft-1")
+
+        recovered = runner.prepare("2026-07-10", {}, retry=True)
+        published = runner.publish("2026-07-10")
+
+        self.assertEqual(recovered.state, "finalizing")
+        self.assertFalse(recovered.owner)
+        self.assertEqual(published.state, "published")
+        self.assertEqual(published.media_id, "draft-1")
+        self.assertEqual(calls, [])
+        self.assertEqual(len(cleanup), 1)
+        with self.assertRaises(KeyError):
+            runner.get(ready.id)
 
     def test_clear_history_deletes_every_draft_before_removing_local_runs(self):
         store = Store(Path(self.tmp.name) / "daily.db")
@@ -305,6 +350,50 @@ class WorkflowTests(unittest.TestCase):
             store.get(first.id)
         with self.assertRaises(KeyError):
             store.get(second.id)
+
+    def test_cleanup_history_lease_blocks_a_second_remote_delete(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        self._published_run(store, "2026-07-10", "draft-1")
+        runner = DailyRun(store, None, None)
+        entered_delete = threading.Event()
+        allow_first_delete = threading.Event()
+        errors = []
+        deleted = []
+
+        def first_delete(media_id):
+            entered_delete.set()
+            self.assertTrue(allow_first_delete.wait(1))
+            deleted.append(("first", media_id))
+
+        def run_first_cleanup():
+            try:
+                runner.clear_history(first_delete)
+            except Exception as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=run_first_cleanup)
+        first.start()
+        self.assertTrue(entered_delete.wait(1))
+
+        with self.assertRaisesRegex(RuntimeError, "cleanup"):
+            runner.clear_history(lambda media_id: deleted.append(("second", media_id)))
+
+        allow_first_delete.set()
+        first.join(1)
+        self.assertFalse(first.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(deleted, [("first", "draft-1")])
+
+    def test_cleanup_history_reclaims_a_stale_crashed_lease(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        self._published_run(store, "2026-07-10", "draft-1")
+        store.begin_cleanup("crashed-owner")
+        with closing(store._connect()) as db, db:
+            db.execute("UPDATE cleanup_leases SET acquired_at=datetime('now', '-6 minutes')")
+
+        summary = DailyRun(store, None, None).clear_history(lambda media_id: self.assertEqual(media_id, "draft-1"))
+
+        self.assertEqual(summary, {"count": 1, "dates": ["2026-07-10"]})
 
     def test_clear_history_refuses_while_a_run_is_active(self):
         store = Store(Path(self.tmp.name) / "daily.db")
@@ -401,18 +490,38 @@ class WorkflowTests(unittest.TestCase):
         run = DailyRun(store, Content(source, llm), None).prepare("2026-07-10", {}, retry=True)
         self.assertEqual(run.state, "ready")
 
-    def test_prepare_fresh_replaces_a_ready_run(self):
+    def test_prepare_fresh_cleans_the_old_cover_before_replacing_a_ready_run(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        runner = DailyRun(store, Content(source, self.valid_llm), None)
+        cleaned = []
+        runner = DailyRun(
+            store,
+            Content(source, self.valid_llm),
+            None,
+            cover=lambda article, settings: {"cover_path": "C:/covers/2026-07-10.png"},
+            cleanup=lambda article: cleaned.append(article["cover_path"]),
+        )
         old = runner.prepare("2026-07-10", {})
 
         fresh = runner.prepare("2026-07-10", {}, fresh=True)
 
         self.assertNotEqual(fresh.id, old.id)
         self.assertEqual(fresh.state, "ready")
+        self.assertEqual(cleaned, ["C:/covers/2026-07-10.png"])
         with self.assertRaises(KeyError):
             runner.get(old.id)
+
+    def test_fresh_generation_refuses_to_orphan_a_legacy_published_receipt(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        legacy = self._published_run(store, "2026-07-10", "draft-1")
+        runner = DailyRun(store, Content(lambda date: [], self.valid_llm), None)
+
+        with self.assertRaisesRegex(RuntimeError, "cleanup-history"):
+            runner.start("2026-07-10", {}, fresh=True)
+
+        retained = store.get(legacy.id)
+        self.assertEqual(retained.state, "published")
+        self.assertEqual(retained.media_id, "draft-1")
 
     def test_started_run_persists_progress_before_background_execution_finishes(self):
         store = Store(Path(self.tmp.name) / "daily.db")

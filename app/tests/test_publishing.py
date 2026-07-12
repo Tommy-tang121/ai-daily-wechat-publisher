@@ -67,6 +67,29 @@ class PublishingTests(unittest.TestCase):
 
         self.assertNotIn("draft-media-id", str(raised.exception))
 
+    def test_delete_draft_treats_an_already_absent_draft_as_success(self):
+        with (
+            patch.dict(os.environ, {"WECHAT_APP_ID": "app-id", "WECHAT_APP_SECRET": "app-secret"}, clear=True),
+            patch("requests.get") as get,
+            patch("requests.post") as post,
+        ):
+            get.return_value.json.return_value = {"access_token": "access-token"}
+            post.return_value.json.return_value = {"errcode": 40007, "errmsg": "invalid media_id"}
+
+            WeChatPublisher("title").delete_draft("draft-media-id")
+
+    def test_delete_draft_keeps_other_wechat_errors_visible(self):
+        with (
+            patch.dict(os.environ, {"WECHAT_APP_ID": "app-id", "WECHAT_APP_SECRET": "app-secret"}, clear=True),
+            patch("requests.get") as get,
+            patch("requests.post") as post,
+        ):
+            get.return_value.json.return_value = {"access_token": "access-token"}
+            post.return_value.json.return_value = {"errcode": 45009, "errmsg": "rate limit"}
+
+            with self.assertRaisesRegex(RuntimeError, "45009"):
+                WeChatPublisher("title").delete_draft("draft-media-id")
+
     def test_command_disables_automatic_link_citations(self):
         command = build_wechat_command("bun", Path("article.md"), "title", "cover.png", "author")
         self.assertIn("--no-cite", command)

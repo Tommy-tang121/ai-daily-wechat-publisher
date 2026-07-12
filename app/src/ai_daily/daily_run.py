@@ -1,5 +1,6 @@
 from dataclasses import replace
 import logging
+import uuid
 
 from .storage import InvalidTransition
 
@@ -32,24 +33,64 @@ class DailyRun:
         return self.settings()
 
     def clear_history(self, delete_draft):
-        runs = self.store.begin_cleanup()
+        owner = uuid.uuid4().hex
+        runs = self.store.begin_cleanup(owner)
+        try:
+            for run in runs:
+                if run.media_id:
+                    self.store.require_cleanup_lease(owner)
+                    delete_draft(run.media_id)
+                    self.store.clear_media_receipt(run.id, owner)
 
-        for run in runs:
-            if run.media_id:
-                delete_draft(run.media_id)
-                self.store.clear_media_receipt(run.id)
-
-        for run in runs:
-            if self.cleanup and run.article:
-                try:
+            for run in runs:
+                self.store.require_cleanup_lease(owner)
+                if self.cleanup and run.article:
                     self.cleanup(run.article)
-                except Exception as exc:
-                    logger.warning("run=%s stage=cleanup_failed error=%s", run.id, type(exc).__name__)
-            self.store.discard(run.id)
+                if not self.store.discard_if_state(run.id, "cleaning"):
+                    raise RuntimeError("history cleanup record changed")
+        finally:
+            self.store.release_cleanup_lease(owner)
         return {"count": len(runs), "dates": [run.date for run in runs]}
 
+    @staticmethod
+    def _published_response(run):
+        return replace(run, state="published", owner=False, article=None, error="")
+
+    def _finish_finalization(self, run):
+        if run.state != "finalizing":
+            raise InvalidTransition(f"cannot finalize {run.state}")
+        try:
+            if self.cleanup and run.article:
+                self.cleanup(run.article)
+        except Exception as exc:
+            logger.warning("run=%s stage=cleanup_failed error=%s", run.id, type(exc).__name__)
+            return self._published_response(run)
+        self.store.discard_if_state(run.id, "finalizing")
+        return self._published_response(run)
+
+    def _claim_fresh(self, date: str):
+        while True:
+            run = self.store.claim(date)
+            if run.owner:
+                return run
+            if run.state == "finalizing":
+                completed = self._finish_finalization(run)
+                try:
+                    self.store.get(run.id)
+                except KeyError:
+                    continue
+                return completed
+            if run.state == "published":
+                raise RuntimeError("legacy published runs require cleanup-history before fresh generation")
+            if run.state not in {"ready", "failed"}:
+                return run
+            if self.cleanup and run.article:
+                self.cleanup(run.article)
+            self.store.discard_if_state(run.id, run.state)
+            continue
+
     def start(self, date: str, settings: dict, retry: bool = False, fresh: bool = False):
-        run = self.store.claim_fresh(date) if fresh else self.store.claim(date)
+        run = self._claim_fresh(date) if fresh else self.store.claim(date)
         if not fresh:
             if retry and run.state == "failed":
                 run = self.store.retry(run.id)
@@ -105,6 +146,8 @@ class DailyRun:
         run = self.store.claim(date)
         if run.state == "published":
             return run
+        if run.state == "finalizing":
+            return self._finish_finalization(run)
         if run.state != "ready":
             raise InvalidTransition(f"cannot publish {run.state}")
         self.store.transition(run.id, "publishing")
@@ -112,21 +155,12 @@ class DailyRun:
         try:
             article = {**run.article, "title": run.article.get("title", f"AI 行业热点新闻 | {run.date}")}
             media_id = self.publisher(article)
-            published = self.store.mark_published(run.id, media_id)
+            published = self.store.mark_finalizing(run.id, media_id)
         except Exception as exc:
             self.store.transition(run.id, "ready", str(exc))
             self.store.record_event(run.id, "error", "error", str(exc))
             logger.error("run=%s stage=failed error=%s", run.id, type(exc).__name__)
             raise
-        if self.cleanup:
-            try:
-                self.cleanup(article)
-            except Exception as exc:
-                logger.warning("run=%s stage=cleanup_failed error=%s", run.id, type(exc).__name__)
-        try:
-            self.store.discard(run.id)
-        except KeyError as exc:
-            if exc.args != (run.id,):
-                raise
+        published = self._finish_finalization(published)
         logger.info("run=%s stage=published", run.id)
-        return replace(published, article=None)
+        return published

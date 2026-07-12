@@ -179,3 +179,13 @@ class WebTests(unittest.TestCase):
         self.assertIn(b'renderCover(null);', script)
         self.assertIn(b'$("btnFetch").disabled = false;', script)
         self.assertIn("微信草稿已创建，本地内容已清理".encode(), script)
+
+    def test_browser_restore_drops_a_deleted_run_and_returns_to_idle(self):
+        script = create_app(FakeRunner()).test_client().get("/static/app.js").data
+
+        self.assertIn(b"error.status = response.status;", script)
+        self.assertIn(b"async function restoreRun() {", script)
+        self.assertIn(b"if (error.status === 404)", script)
+        self.assertIn(b'state.runId = "";', script)
+        self.assertIn(b'localStorage.removeItem("ai-daily-run-id");', script)
+        self.assertIn(b'setStatus("idle",', script)

@@ -26,14 +26,17 @@ ALLOWED = {
     "scraping": {"rewriting", "failed"},
     "rewriting": {"ready", "failed"},
     "ready": {"publishing", "failed"},
-    "publishing": {"published", "ready", "failed"},
+    "publishing": {"finalizing", "published", "ready", "failed"},
+    "finalizing": set(),
     "published": set(),
     "failed": set(),
     "cleaning": set(),
 }
 
 ACTIVE_STATES = {"queued", "scraping", "rewriting", "publishing"}
-REPLACEABLE_STATES = {"ready", "failed", "published"}
+HISTORY_BLOCKING_STATES = ACTIVE_STATES | {"finalizing"}
+CLEANUP_LEASE_NAME = "history"
+CLEANUP_LEASE_MINUTES = 5
 
 
 class Store:
@@ -54,6 +57,9 @@ class Store:
                 FOREIGN KEY(run_id) REFERENCES daily_runs(id))""")
             db.execute("""CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS cleanup_leases (
+                name TEXT PRIMARY KEY, owner TEXT NOT NULL,
+                acquired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -77,18 +83,8 @@ class Store:
             return self._run(row, owner=True)
 
     def claim_fresh(self, date: str) -> Run:
-        with closing(self._connect()) as db, db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT * FROM daily_runs WHERE date=?", (date,)).fetchone()
-            if row and row["state"] not in REPLACEABLE_STATES:
-                return self._run(row)
-            if row:
-                db.execute("DELETE FROM run_events WHERE run_id=?", (row["id"],))
-                db.execute("DELETE FROM daily_runs WHERE id=?", (row["id"],))
-            run_id = uuid.uuid4().hex
-            db.execute("INSERT INTO daily_runs(id, date, state) VALUES (?, ?, 'queued')", (run_id, date))
-            row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
-            return self._run(row, owner=True)
+        """Legacy compatibility only; fresh replacement belongs to DailyRun."""
+        return self.claim(date)
 
     def get(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
@@ -102,25 +98,67 @@ class Store:
             rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
         return [self._run(row) for row in rows]
 
-    def begin_cleanup(self) -> list[Run]:
+    def begin_cleanup(self, owner: str) -> list[Run]:
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            lease = db.execute(
+                "SELECT owner, acquired_at FROM cleanup_leases WHERE name=?",
+                (CLEANUP_LEASE_NAME,),
+            ).fetchone()
             rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
-            if any(row["state"] in ACTIVE_STATES for row in rows):
+            if lease and db.execute(
+                "SELECT datetime('now', ?)", (f"-{CLEANUP_LEASE_MINUTES} minutes",)
+            ).fetchone()[0] <= lease["acquired_at"]:
+                raise RuntimeError("history cleanup is already active")
+            if any(row["state"] in HISTORY_BLOCKING_STATES for row in rows):
                 raise RuntimeError("cannot clear history while active runs exist")
+            db.execute(
+                """INSERT INTO cleanup_leases(name, owner, acquired_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(name) DO UPDATE SET owner=excluded.owner, acquired_at=CURRENT_TIMESTAMP""",
+                (CLEANUP_LEASE_NAME, owner),
+            )
             runs = [self._run(row) for row in rows]
             if runs:
                 db.execute("UPDATE daily_runs SET state='cleaning', updated_at=CURRENT_TIMESTAMP")
         return runs
 
-    def clear_media_receipt(self, run_id: str) -> None:
+    def require_cleanup_lease(self, owner: str) -> None:
         with closing(self._connect()) as db, db:
             updated = db.execute(
-                "UPDATE daily_runs SET media_id='', updated_at=CURRENT_TIMESTAMP WHERE id=? AND state='cleaning'",
-                (run_id,),
+                """UPDATE cleanup_leases SET acquired_at=CURRENT_TIMESTAMP
+                   WHERE name=? AND owner=? AND acquired_at >= datetime('now', ?)""",
+                (CLEANUP_LEASE_NAME, owner, f"-{CLEANUP_LEASE_MINUTES} minutes"),
+            )
+            if not updated.rowcount:
+                raise RuntimeError("history cleanup lease is unavailable")
+
+    def release_cleanup_lease(self, owner: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "DELETE FROM cleanup_leases WHERE name=? AND owner=?",
+                (CLEANUP_LEASE_NAME, owner),
+            )
+
+    def clear_media_receipt(self, run_id: str, owner: str) -> None:
+        with closing(self._connect()) as db, db:
+            updated = db.execute(
+                """UPDATE daily_runs SET media_id='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='cleaning' AND EXISTS (
+                       SELECT 1 FROM cleanup_leases WHERE name=? AND owner=?)""",
+                (run_id, CLEANUP_LEASE_NAME, owner),
             )
             if not updated.rowcount:
                 raise KeyError(run_id)
+
+    def discard_if_state(self, run_id: str, state: str) -> bool:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != state:
+                return False
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM daily_runs WHERE id=? AND state=?", (run_id, state))
+        return True
 
     def discard(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
@@ -166,6 +204,17 @@ class Store:
             if not row or row["state"] != "publishing":
                 raise InvalidTransition("only publishing runs can be published")
             db.execute("UPDATE daily_runs SET state='published', media_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                       (media_id, run_id))
+        return self.get(run_id)
+
+    def mark_finalizing(self, run_id: str, media_id: str) -> Run:
+        if not media_id:
+            raise ValueError("missing media_id")
+        with closing(self._connect()) as db, db:
+            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != "publishing":
+                raise InvalidTransition("only publishing runs can finalize")
+            db.execute("UPDATE daily_runs SET state='finalizing', media_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
                        (media_id, run_id))
         return self.get(run_id)
 

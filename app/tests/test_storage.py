@@ -50,7 +50,7 @@ class StoreTests(unittest.TestCase):
             self.assertIsNone(db.execute("SELECT 1 FROM daily_runs WHERE id=?", (run.id,)).fetchone())
             self.assertIsNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (run.id,)).fetchone())
 
-    def test_claim_fresh_replaces_ready_failed_and_published_runs(self):
+    def test_claim_fresh_never_discards_existing_runs(self):
         for state in ("ready", "failed", "published"):
             with self.subTest(state=state):
                 date = f"2026-07-{11 + len(state)}"
@@ -71,14 +71,13 @@ class StoreTests(unittest.TestCase):
 
                 fresh = self.store.claim_fresh(date)
 
-                self.assertTrue(fresh.owner)
-                self.assertNotEqual(fresh.id, old.id)
-                self.assertEqual(fresh.state, "queued")
-                self.assertIsNone(fresh.article)
-                with self.assertRaises(KeyError):
-                    self.store.get(old.id)
+                self.assertFalse(fresh.owner)
+                self.assertEqual(fresh.id, old.id)
+                self.assertEqual(fresh.state, state)
+                self.assertEqual(fresh.media_id, "media-1" if state == "published" else "")
+                self.assertEqual(fresh.article, {"markdown": "article"} if state in {"ready", "published"} else None)
                 with closing(self.store._connect()) as db:
-                    self.assertIsNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (old.id,)).fetchone())
+                    self.assertIsNotNone(db.execute("SELECT 1 FROM run_events WHERE run_id=?", (old.id,)).fetchone())
 
     def test_claim_fresh_keeps_active_runs(self):
         for state in ("queued", "scraping", "rewriting", "publishing"):
@@ -104,7 +103,7 @@ class StoreTests(unittest.TestCase):
         self.store.transition(run.id, "scraping")
         self.store.transition(run.id, "rewriting")
         self.store.save_article(run.id, {"markdown": "article"})
-        self.store.begin_cleanup()
+        self.store.begin_cleanup("test-owner")
 
         claimed = self.store.claim_fresh("2026-07-29")
 
