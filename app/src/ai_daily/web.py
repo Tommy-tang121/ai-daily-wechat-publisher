@@ -5,14 +5,21 @@ from threading import Thread
 
 from flask import Flask, abort, jsonify, request
 
+from .daily_run import PublicationUncertainError
+
 
 def _payload(run):
     if is_dataclass(run):
-        return asdict(run)
-    return {
-        key: getattr(run, key, None)
-        for key in ("id", "state", "media_id", "article", "error", "owner")
-    }
+        payload = asdict(run)
+    else:
+        payload = {
+            key: getattr(run, key, None)
+            for key in ("id", "state", "media_id", "article", "error", "owner")
+        }
+    if payload.get("state") == "cleaning":
+        payload["article"] = None
+        payload["media_id"] = ""
+    return payload
 
 
 def create_app(runner, settings=None, tasks=None):
@@ -94,7 +101,15 @@ def create_app(runner, settings=None, tasks=None):
             return jsonify(error="请选择日期"), 400
         try:
             run_settings = current_settings()
-            run = runner.start(date, run_settings, retry=bool(body.get("retry")))
+            run = runner.start(
+                date,
+                run_settings,
+                retry=bool(body.get("retry")),
+                fresh=True,
+                resolve_uncertain=body.get("resolve_uncertain") is True,
+            )
+        except PublicationUncertainError as exc:
+            return jsonify(error=str(exc), state="publication_uncertain", code="publication_uncertain"), 409
         except Exception as exc:
             return jsonify(error=str(exc)), 502
         if getattr(run, "owner", False):
@@ -104,8 +119,9 @@ def create_app(runner, settings=None, tasks=None):
     @app.get("/api/runs/<run_id>")
     def read(run_id):
         try:
-            payload = _payload(runner.get(run_id))
-            payload["events"] = runner.events(run_id)
+            run = runner.get(run_id)
+            payload = _payload(run)
+            payload["events"] = [] if run.state == "cleaning" else runner.events(run_id)
             return jsonify(payload)
         except KeyError:
             return jsonify(error="运行记录不存在"), 404

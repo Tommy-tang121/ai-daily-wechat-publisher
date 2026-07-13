@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import date as calendar_date
 from pathlib import Path
 
 from .content import Content
@@ -111,12 +112,35 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
 
     def cover(article: dict, values: dict) -> dict:
         path = generate_cover(
-            app_dir / "static" / "covers",
+            app_dir / "static" / "runtime-covers",
             article["date"],
             values.get("title", settings["title"]),
             values.get("author", settings["author"]),
         )
-        return {"cover_path": str(path), "cover_url": f"/static/covers/{path.name}"}
+        return {"cover_path": str(path), "cover_url": f"/static/runtime-covers/{path.name}"}
+
+    runtime_covers_dir = (app_dir / "static" / "runtime-covers").resolve()
+
+    def remove_runtime_cover(path: Path) -> None:
+        if path.is_symlink():
+            return
+        resolved = path.resolve()
+        if resolved.is_relative_to(runtime_covers_dir) and resolved.is_file():
+            resolved.unlink()
+
+    def cleanup(article: dict) -> None:
+        cover_path = article.get("cover_path")
+        if not cover_path:
+            return
+        remove_runtime_cover(Path(cover_path))
+
+    def cleanup_date(run_date: str) -> None:
+        try:
+            calendar_date.fromisoformat(run_date)
+        except (TypeError, ValueError):
+            return
+        for path in runtime_covers_dir.glob(f"{run_date}.*"):
+            remove_runtime_cover(path)
 
     store = Store(app_dir / "data" / "ai_daily.db")
     store.initialize_settings(settings)
@@ -126,4 +150,6 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
         publisher,
         cover=cover,
         settings=settings,
+        cleanup=cleanup,
+        cleanup_date=cleanup_date,
     )

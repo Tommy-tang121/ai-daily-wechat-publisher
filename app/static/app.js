@@ -1,6 +1,7 @@
 (function () {
   const state = { calYear: 0, calMonth: 0, configLoaded: false, run: null, runId: "", selectedDate: "", timer: null };
   const stepNames = ["scraping", "rewriting", "formatting", "cover", "done"];
+  const activeStates = ["queued", "scraping", "rewriting", "publishing", "finalizing", "cleaning"];
   const $ = (id) => document.getElementById(id);
   const pad = (value) => String(value).padStart(2, "0");
   const dateValue = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -18,7 +19,12 @@
   async function requestJson(url, options) {
     const response = await fetch(url, options);
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || "请求失败");
+    if (!response.ok) {
+      const error = new Error(payload.error || "请求失败");
+      error.status = response.status;
+      error.code = payload.code;
+      throw error;
+    }
     return payload;
   }
 
@@ -169,12 +175,27 @@
   }
 
   function renderRun(run) {
+    if (run.state === "published" && !run.article) {
+      stopPolling();
+      state.run = null;
+      state.runId = "";
+      localStorage.removeItem("ai-daily-run-id");
+      renderArticle(null);
+      renderCover(null);
+      $("btnFetch").disabled = false;
+      $("btnPublish").disabled = true;
+      $("cornerTag").classList.remove("show");
+      $("cornerBadge").textContent = "DONE";
+      $("fetchHint").textContent = "微信草稿已创建，本地内容已清理";
+      setStatus("done", "微信草稿已创建，本地内容已清理", `草稿回执：${run.media_id || "已记录"}`);
+      return;
+    }
     state.run = run;
     state.runId = run.id || state.runId;
     if (run.id) localStorage.setItem("ai-daily-run-id", run.id);
     resetProgress();
     (run.events || []).forEach(applyEvent);
-    const active = ["queued", "scraping", "rewriting", "publishing"].includes(run.state);
+    const active = activeStates.includes(run.state);
     $("btnFetch").disabled = active;
     $("cornerTag").classList.toggle("show", active || run.state === "failed");
 
@@ -196,6 +217,27 @@
       $("errText").textContent = run.error || "处理失败";
       $("cornerBadge").textContent = "FAIL";
       setStatus("failed", "运行失败", run.error || "请检查错误后重新抓取");
+    } else if (run.state === "publication_uncertain") {
+      renderArticle(null);
+      renderCover(null);
+      $("btnPublish").disabled = true;
+      $("cornerBadge").textContent = "CHECK";
+      $("fetchHint").textContent = "发布结果待确认：请先在微信草稿箱核对";
+      setStatus("failed", "发布结果待确认", "请先核对微信草稿箱；确认后再次点击抓取，才会重新生成。");
+    } else if (run.state === "finalizing") {
+      renderArticle(null);
+      renderCover(null);
+      $("btnPublish").disabled = true;
+      $("cornerBadge").textContent = "CLEAN";
+      $("fetchHint").textContent = "微信草稿已创建，正在清理本地封面";
+      setStatus("running", "微信草稿已创建", "正在清理本地封面，完成后会自动清空页面。");
+    } else if (run.state === "cleaning") {
+      renderArticle(null);
+      renderCover(null);
+      $("btnPublish").disabled = true;
+      $("cornerBadge").textContent = "CLEAN";
+      $("fetchHint").textContent = "正在清理本地临时内容";
+      setStatus("running", "正在清理历史", "清理完成后会自动回到空白页面。");
     } else if (active) {
       const latest = run.events?.at(-1)?.message || "正在处理";
       $("cornerBadge").textContent = "BUSY";
@@ -211,19 +253,35 @@
     state.timer = null;
   }
 
+  function clearDeletedRun() {
+    stopPolling();
+    state.run = null;
+    state.runId = "";
+    localStorage.removeItem("ai-daily-run-id");
+    renderArticle(null);
+    renderCover(null);
+    $("btnFetch").disabled = false;
+    $("btnPublish").disabled = true;
+    $("cornerTag").classList.remove("show");
+    setStatus("idle", "等待操作", "请选择日期后点击「抓取」开始。");
+  }
+
   async function pollRun() {
     if (!state.runId) return;
     try {
       const run = await requestJson(`/api/runs/${encodeURIComponent(state.runId)}`);
       renderRun(run);
-      if (["queued", "scraping", "rewriting", "publishing"].includes(run.state)) {
+      if (activeStates.includes(run.state)) {
         state.timer = window.setTimeout(pollRun, 1000);
       } else {
         stopPolling();
       }
     } catch (error) {
+      if (error.status === 404) {
+        clearDeletedRun();
+        return;
+      }
       stopPolling();
-      localStorage.removeItem("ai-daily-run-id");
       setStatus("failed", "无法读取运行进度", error.message);
     }
   }
@@ -232,13 +290,21 @@
     const runId = localStorage.getItem("ai-daily-run-id");
     if (!runId) return;
     state.runId = runId;
-    const run = await requestJson(`/api/runs/${encodeURIComponent(runId)}`);
-    state.selectedDate = run.date;
-    const restored = new Date(`${run.date}T00:00:00`);
-    renderCalendar(restored.getFullYear(), restored.getMonth());
-    renderRun(run);
-    if (["queued", "scraping", "rewriting", "publishing"].includes(run.state)) {
-      state.timer = window.setTimeout(pollRun, 1000);
+    try {
+      const run = await requestJson(`/api/runs/${encodeURIComponent(runId)}`);
+      state.selectedDate = run.date;
+      const restored = new Date(`${run.date}T00:00:00`);
+      renderCalendar(restored.getFullYear(), restored.getMonth());
+      renderRun(run);
+      if (activeStates.includes(run.state)) {
+        state.timer = window.setTimeout(pollRun, 1000);
+      }
+    } catch (error) {
+      if (error.status === 404) {
+        clearDeletedRun();
+        return;
+      }
+      throw error;
     }
   }
 
@@ -300,20 +366,38 @@
     }
   });
 
+  async function startRun(date, resolveUncertain) {
+    return requestJson("/api/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, retry: true, resolve_uncertain: resolveUncertain }),
+    });
+  }
+
   $("btnFetch").addEventListener("click", async () => {
     if (!state.selectedDate) return;
     stopPolling();
+    const date = state.selectedDate;
     try {
       await saveSettings({
         title: $("inputTitle").value,
         author: $("inputAuthor").value,
         max_words: Number($("inputMaxWords").value) || 150,
       });
-      const run = await requestJson("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: state.selectedDate, retry: true }),
-      });
+      let run;
+      try {
+        run = await startRun(date, false);
+      } catch (error) {
+        if (error.code === "publication_uncertain") {
+          if (!window.confirm("请先确认微信草稿箱中没有这篇草稿。确认后才会重新生成，是否继续？")) {
+            setStatus("failed", "发布结果待确认", "请先核对微信草稿箱。");
+            return;
+          }
+          run = await startRun(date, true);
+        } else {
+          throw error;
+        }
+      }
       renderRun(run);
       pollRun();
     } catch (error) {
@@ -352,7 +436,14 @@
         body: JSON.stringify({ date: state.selectedDate }),
       });
       renderRun(run);
-      toast("微信草稿已创建", "success");
+      if (run.state === "publication_uncertain") {
+        toast("发布结果待确认，请先在微信草稿箱核对", "error");
+      } else if (run.state === "finalizing") {
+        toast("微信草稿已创建，正在清理本地封面", "success");
+        pollRun();
+      } else {
+        toast("微信草稿已创建", "success");
+      }
     } catch (error) {
       $("btnPublish").disabled = false;
       toast(`创建草稿失败：${error.message}`, "error");

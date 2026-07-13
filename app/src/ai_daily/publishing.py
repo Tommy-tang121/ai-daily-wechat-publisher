@@ -1,8 +1,11 @@
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+import requests
 
 from .cover import generate_cover
 
@@ -28,7 +31,7 @@ class WeChatPublisher:
             raise RuntimeError("微信发布环境不完整：缺少 Bun 或发布脚本")
         title = article.get("title") or self.title
         cover = article.get("cover_path") or self.cover or str(
-            generate_cover(Path(__file__).parents[2] / "static" / "covers", article["date"], title)
+            generate_cover(Path(__file__).parents[2] / "static" / "runtime-covers", article["date"], title)
         )
         with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as file:
             file.write(article["markdown"])
@@ -45,3 +48,41 @@ class WeChatPublisher:
             return media_id
         finally:
             path.unlink(missing_ok=True)
+
+    def delete_draft(self, media_id: str) -> None:
+        app_id = os.environ.get("WECHAT_APP_ID")
+        app_secret = os.environ.get("WECHAT_APP_SECRET")
+        if not app_id or not app_secret:
+            raise RuntimeError("微信公众号删除草稿失败：发布凭据未配置")
+        try:
+            token_response = requests.get(
+                "https://api.weixin.qq.com/cgi-bin/token",
+                params={"grant_type": "client_credential", "appid": app_id, "secret": app_secret},
+                timeout=(15, 30),
+            )
+            token_response.raise_for_status()
+            token_payload = token_response.json()
+        except (requests.RequestException, ValueError):
+            raise RuntimeError("微信公众号获取访问令牌失败") from None
+        access_token = token_payload.get("access_token") if isinstance(token_payload, dict) else None
+        if not access_token:
+            code = token_payload.get("errcode") if isinstance(token_payload, dict) else None
+            suffix = f"（错误码 {code}）" if code is not None else ""
+            raise RuntimeError(f"微信公众号获取访问令牌失败{suffix}")
+        try:
+            delete_response = requests.post(
+                "https://api.weixin.qq.com/cgi-bin/draft/delete",
+                params={"access_token": access_token},
+                json={"media_id": media_id},
+                timeout=(15, 30),
+            )
+            delete_response.raise_for_status()
+            delete_payload = delete_response.json()
+        except (requests.RequestException, ValueError):
+            raise RuntimeError("微信公众号删除草稿失败") from None
+        if isinstance(delete_payload, dict) and delete_payload.get("errcode") == 40007 and "invalid media_id" in str(delete_payload.get("errmsg", "")).lower():
+            return
+        if not isinstance(delete_payload, dict) or delete_payload.get("errcode") != 0:
+            code = delete_payload.get("errcode") if isinstance(delete_payload, dict) else None
+            suffix = f"（错误码 {code}）" if code is not None else ""
+            raise RuntimeError(f"微信公众号删除草稿失败{suffix}")

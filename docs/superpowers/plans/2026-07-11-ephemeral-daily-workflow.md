@@ -4,7 +4,7 @@
 
 **Goal:** Make every completed daily article temporary, allow manual re-generation for any date, and remove the existing WeChat legacy draft plus all local historical runs.
 
-**Architecture:** SQLite remains only for active work and failed publishing retries. A successful WeChat draft creation returns a short response to the browser, then removes the article, event rows and runtime cover. A separate one-time CLI cleanup uses the same WeChat credentials as the current publisher to delete the existing draft before purging the final local receipt.
+**Architecture:** SQLite remains only for active work and generation failures that occurred before calling WeChat. Immediately before the WeChat publisher is invoked, one local transaction detaches article/event/receipt data and retains the article only in process memory. Once the publisher is invoked, neither a success nor an exception is retried automatically: success enters `finalizing` with only a private cover-cleanup marker, while an unknown outcome becomes `publication_uncertain`. A separate private cover-cleanup marker may retain only a safe local cover path until deletion succeeds. A one-time CLI cleanup uses the same WeChat credentials as the current publisher to delete the existing draft before purging the final local receipt.
 
 **Tech Stack:** Python 3.12, unittest, Flask, SQLite, Pillow, requests, existing baoyu-post-to-wechat publisher.
 
@@ -44,17 +44,13 @@ Add a test with an injected cleanup callback. After DailyRun.publish succeeds, a
 - publisher is called once;
 - cleanup receives the persisted cover path;
 - runner.get(run.id) raises KeyError;
-- the returned publish result has state published, media_id draft-1 and article None.
+- the returned publish result has state published, an empty media_id and article None.
 
-Keep the existing failed-publish test and assert its ready article remains present.
+Replace the failed-publish expectation: a publisher invocation error has an unknown remote outcome, so it enters `publication_uncertain` with no article, events or receipt and never calls the publisher again. Keep generation failures before the publisher invocation retryable.
 
 - [ ] Step 5: Implement successful-publish cleanup
 
-Add cleanup=None to DailyRun.__init__. In DailyRun.publish, preserve the current failure behavior. On success:
-1. mark the run published to get a valid receipt;
-2. call cleanup with the article when supplied;
-3. discard the persisted run;
-4. return the completed Run with article=None.
+Add cleanup=None to DailyRun.__init__. In DailyRun.publish, atomically detach article, events and receipt before invoking the publisher, retaining the article only in memory. Move a successful response to private finalization metadata before cleanup: retain only the local cover path, return `finalizing` while cleanup fails, then delete the record once a later cleanup succeeds. A publisher invocation exception—or a local finalization write failure after the remote response—follows the same content-clearing path into `publication_uncertain`; it is not a ready retry.
 
 Add fresh=False to DailyRun.start and DailyRun.prepare. When fresh=True, use Store.claim_fresh; web manual generation will use this flag while scheduler retries will not.
 
@@ -140,7 +136,7 @@ Expected: WeChatPublisher has no delete_draft method.
 Add token and draft-delete URL constants to publishing.py. Implement WeChatPublisher.delete_draft using requests.get for the token and requests.post for deletion, both with timeout=(15, 30). Validate access_token and errcode; report only WeChat error text or code, never request URLs or credentials.
 
 Add DailyRun.clear_history(delete_draft) that:
-1. refuses when any run is active;
+1. refuses when a run is active within the stale window, or is finalizing/publication-uncertain; atomically converts eligible historical rows to cleaning while clearing article/event data and moving only cover cleanup paths to private metadata;
 2. reads all saved runs;
 3. deletes every WeChat draft receipt through delete_draft before any local row is removed;
 4. invokes the runtime cover cleanup and Store.discard for every local run only after all external deletions succeed.
@@ -185,7 +181,7 @@ Expected: all tests pass with no compilation or whitespace errors.
 
 - [ ] Step 3: Update operations documentation
 
-Replace archival language in README and the stability specification with the temporary-retention rules. Document that failed draft creation is retained only for retry and that manual historical selection always starts a new generation.
+Replace archival language in README and the stability specification with the temporary-retention rules. Document that generation failures before the WeChat call are retryable, while any WeChat publisher invocation error is an outcome-unknown state requiring explicit user confirmation; manual historical selection always starts a new generation.
 
 - [ ] Step 4: Verify dry-run preconditions then perform the approved cleanup
 

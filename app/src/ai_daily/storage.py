@@ -26,10 +26,26 @@ ALLOWED = {
     "scraping": {"rewriting", "failed"},
     "rewriting": {"ready", "failed"},
     "ready": {"publishing", "failed"},
-    "publishing": {"published", "ready", "failed"},
+    # A publisher call may already have created a remote draft. Only dedicated
+    # persistence methods may leave this state; generic transitions cannot.
+    "publishing": set(),
+    "finalizing": set(),
+    "publication_uncertain": set(),
     "published": set(),
     "failed": set(),
+    "cleaning": set(),
 }
+
+ACTIVE_STATES = {"queued", "scraping", "rewriting", "publishing"}
+# Events are a liveness heartbeat only once a worker is actually processing
+# content. A queued row has no worker yet, so an old worker cannot keep it
+# alive merely by writing a late progress message.
+EVENT_STATES = {"scraping", "rewriting", "ready"}
+HISTORY_BLOCKING_STATES = {"publishing", "finalizing", "publication_uncertain"}
+RECLAIMABLE_STATES = {"queued", "scraping", "rewriting"}
+CLEANUP_LEASE_NAME = "history"
+CLEANUP_LEASE_MINUTES = 5
+STALE_RUN_MINUTES = 30
 
 
 class Store:
@@ -50,6 +66,12 @@ class Store:
                 FOREIGN KEY(run_id) REFERENCES daily_runs(id))""")
             db.execute("""CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY, value TEXT NOT NULL)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS cleanup_leases (
+                name TEXT PRIMARY KEY, owner TEXT NOT NULL,
+                acquired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS pending_cover_cleanup (
+                run_id TEXT PRIMARY KEY, cover_path TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES daily_runs(id))""")
 
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=10)
@@ -72,12 +94,118 @@ class Store:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             return self._run(row, owner=True)
 
+    def claim_fresh(self, date: str) -> Run:
+        """Legacy compatibility only; fresh replacement belongs to DailyRun."""
+        return self.claim(date)
+
     def get(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             raise KeyError(run_id)
         return self._run(row)
+
+    def list_runs(self) -> list[Run]:
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
+        return [self._run(row) for row in rows]
+
+    def begin_cleanup(self, owner: str) -> list[Run]:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            lease = db.execute(
+                "SELECT owner, acquired_at FROM cleanup_leases WHERE name=?",
+                (CLEANUP_LEASE_NAME,),
+            ).fetchone()
+            rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
+            stale_cutoff = db.execute(
+                "SELECT datetime('now', ?)", (f"-{STALE_RUN_MINUTES} minutes",)
+            ).fetchone()[0]
+            if lease and db.execute(
+                "SELECT datetime('now', ?)", (f"-{CLEANUP_LEASE_MINUTES} minutes",)
+            ).fetchone()[0] <= lease["acquired_at"]:
+                raise RuntimeError("history cleanup is already active")
+            if any(
+                row["state"] in HISTORY_BLOCKING_STATES
+                or (row["state"] in ACTIVE_STATES and row["updated_at"] >= stale_cutoff)
+                for row in rows
+            ):
+                raise RuntimeError("cannot clear history while active runs exist")
+            db.execute(
+                """INSERT INTO cleanup_leases(name, owner, acquired_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(name) DO UPDATE SET owner=excluded.owner, acquired_at=CURRENT_TIMESTAMP""",
+                (CLEANUP_LEASE_NAME, owner),
+            )
+            if rows:
+                for row in rows:
+                    article = None
+                    try:
+                        article = json.loads(row["article"]) if row["article"] else None
+                    except json.JSONDecodeError:
+                        pass
+                    if isinstance(article, dict) and article.get("cover_path"):
+                        db.execute(
+                            """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                               ON CONFLICT(run_id) DO NOTHING""",
+                            (row["id"], article["cover_path"]),
+                        )
+                    db.execute("DELETE FROM run_events WHERE run_id=?", (row["id"],))
+                db.execute(
+                    "UPDATE daily_runs SET state='cleaning', article=NULL, updated_at=CURRENT_TIMESTAMP"
+                )
+            cleaned_rows = db.execute("SELECT * FROM daily_runs ORDER BY date").fetchall()
+        return [self._run(row) for row in cleaned_rows]
+
+    def require_cleanup_lease(self, owner: str) -> None:
+        with closing(self._connect()) as db, db:
+            updated = db.execute(
+                """UPDATE cleanup_leases SET acquired_at=CURRENT_TIMESTAMP
+                   WHERE name=? AND owner=? AND acquired_at >= datetime('now', ?)""",
+                (CLEANUP_LEASE_NAME, owner, f"-{CLEANUP_LEASE_MINUTES} minutes"),
+            )
+            if not updated.rowcount:
+                raise RuntimeError("history cleanup lease is unavailable")
+
+    def release_cleanup_lease(self, owner: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute(
+                "DELETE FROM cleanup_leases WHERE name=? AND owner=?",
+                (CLEANUP_LEASE_NAME, owner),
+            )
+
+    def clear_media_receipt(self, run_id: str, owner: str) -> None:
+        with closing(self._connect()) as db, db:
+            updated = db.execute(
+                """UPDATE daily_runs SET media_id='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='cleaning' AND EXISTS (
+                       SELECT 1 FROM cleanup_leases WHERE name=? AND owner=?)""",
+                (run_id, CLEANUP_LEASE_NAME, owner),
+            )
+            if not updated.rowcount:
+                raise KeyError(run_id)
+
+    def discard_if_state(self, run_id: str, state: str) -> bool:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != state:
+                return False
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM pending_cover_cleanup WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM daily_runs WHERE id=? AND state=?", (run_id, state))
+        return True
+
+    def discard(self, run_id: str) -> Run:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
+                raise KeyError(run_id)
+            discarded = self._run(row)
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM pending_cover_cleanup WHERE run_id=?", (run_id,))
+            db.execute("DELETE FROM daily_runs WHERE id=?", (run_id,))
+            return discarded
 
     def transition(self, run_id: str, target: str, error: str = "") -> Run:
         with closing(self._connect()) as db, db:
@@ -86,8 +214,10 @@ class Store:
                 raise KeyError(run_id)
             if target not in ALLOWED.get(row["state"], set()):
                 raise InvalidTransition(f"{row['state']} -> {target}")
-            db.execute("UPDATE daily_runs SET state=?, error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                       (target, error[:500], run_id))
+            updated = db.execute("UPDATE daily_runs SET state=?, error=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND state=?",
+                                 (target, error[:500], run_id, row["state"]))
+            if not updated.rowcount:
+                raise InvalidTransition(f"{row['state']} -> {target}")
         return self.get(run_id)
 
     def save_article(self, run_id: str, article: dict) -> Run:
@@ -113,13 +243,114 @@ class Store:
                        (media_id, run_id))
         return self.get(run_id)
 
+    def begin_publication(self, run_id: str) -> tuple[Run, dict]:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != "ready" or not row["article"]:
+                raise InvalidTransition("only ready runs with an article can publish")
+            article = json.loads(row["article"])
+            cover_path = article.get("cover_path") if isinstance(article, dict) else None
+            if cover_path:
+                db.execute(
+                    """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                       ON CONFLICT(run_id) DO UPDATE SET cover_path=excluded.cover_path""",
+                    (run_id, cover_path),
+                )
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            updated = db.execute(
+                """UPDATE daily_runs
+                   SET state='publishing', article=NULL, media_id='', error='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='ready'""",
+                (run_id,),
+            )
+            if not updated.rowcount:
+                raise InvalidTransition("ready -> publishing")
+            published = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+        return self._run(published), article
+
+    def mark_finalizing(self, run_id: str, media_id: str) -> Run:
+        if not media_id:
+            raise ValueError("missing media_id")
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != "publishing":
+                raise InvalidTransition("only publishing runs can finalize")
+            article = json.loads(row["article"]) if row["article"] else {}
+            cover_path = article.get("cover_path") if isinstance(article, dict) else None
+            if cover_path:
+                db.execute(
+                    """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                       ON CONFLICT(run_id) DO UPDATE SET cover_path=excluded.cover_path""",
+                    (run_id, cover_path),
+                )
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute(
+                """UPDATE daily_runs
+                   SET state='finalizing', article=NULL, media_id='', error='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='publishing'""",
+                (run_id,),
+            )
+        return self.get(run_id)
+
+    def mark_publication_uncertain(self, run_id: str, error: str) -> Run:
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row or row["state"] != "publishing":
+                raise InvalidTransition("only publishing runs can become uncertain")
+            article = json.loads(row["article"]) if row["article"] else {}
+            cover_path = article.get("cover_path") if isinstance(article, dict) else None
+            if cover_path:
+                db.execute(
+                    """INSERT INTO pending_cover_cleanup(run_id, cover_path) VALUES (?, ?)
+                       ON CONFLICT(run_id) DO UPDATE SET cover_path=excluded.cover_path""",
+                    (run_id, cover_path),
+                )
+            db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+            db.execute(
+                """UPDATE daily_runs
+                   SET state='publication_uncertain', article=NULL, media_id='', error=?, updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='publishing'""",
+                (error[:500], run_id),
+            )
+        return self.get(run_id)
+
+    def pending_cover_cleanup(self, run_id: str) -> dict | None:
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT cover_path FROM pending_cover_cleanup WHERE run_id=?", (run_id,)).fetchone()
+        return {"cover_path": row["cover_path"]} if row else None
+
+    def clear_pending_cover_cleanup(self, run_id: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute("DELETE FROM pending_cover_cleanup WHERE run_id=?", (run_id,))
+
+    def stale_publishing(self, run_id: str, minutes: int) -> Run | None:
+        with closing(self._connect()) as db:
+            row = db.execute(
+                """SELECT * FROM daily_runs
+                   WHERE id=? AND state='publishing' AND updated_at < datetime('now', ?)""",
+                (run_id, f"-{minutes} minutes"),
+            ).fetchone()
+        return self._run(row) if row else None
+
     def retry(self, run_id: str) -> Run:
         with closing(self._connect()) as db, db:
             row = db.execute("SELECT state, article FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row or row["state"] != "failed":
                 raise InvalidTransition("only failed runs can be retried")
             state = "ready" if row["article"] else "queued"
-            db.execute("UPDATE daily_runs SET state=?, error='', updated_at=CURRENT_TIMESTAMP WHERE id=?", (state, run_id))
+            updated = db.execute(
+                """UPDATE daily_runs SET state=?, error='', updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state='failed'""",
+                (state, run_id),
+            )
+            if not updated.rowcount:
+                current = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+                if not current:
+                    raise KeyError(run_id)
+                return self._run(current)
         run = self.get(run_id)
         return Run(run.id, run.date, run.state, state == "queued", run.media_id, run.article, run.error)
 
@@ -129,27 +360,38 @@ class Store:
             row = db.execute("SELECT * FROM daily_runs WHERE id=?", (run_id,)).fetchone()
             if not row:
                 raise KeyError(run_id)
-            if row["state"] not in {"queued", "scraping", "rewriting", "publishing"}:
+            if row["state"] not in RECLAIMABLE_STATES:
                 return self._run(row)
             result = db.execute(
                 """UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP
-                   WHERE id=? AND updated_at < datetime('now', ?)""",
-                (run_id, age),
+                   WHERE id=? AND state=? AND updated_at < datetime('now', ?)""",
+                (run_id, row["state"], age),
             )
             if not result.rowcount:
-                return self._run(row)
+                return self.get(run_id)
         run = self.get(run_id)
         return Run(run.id, run.date, run.state, True, run.media_id, run.article, run.error)
 
-    def record_event(self, run_id: str, stage: str, status: str, message: str) -> None:
+    def record_event(self, run_id: str, stage: str, status: str, message: str) -> bool:
         with closing(self._connect()) as db, db:
-            exists = db.execute("SELECT 1 FROM daily_runs WHERE id=?", (run_id,)).fetchone()
-            if not exists:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
                 raise KeyError(run_id)
+            if row["state"] not in EVENT_STATES:
+                return False
             db.execute(
                 "INSERT INTO run_events(run_id, stage, status, message) VALUES (?, ?, ?, ?)",
                 (run_id, stage, status, message[:500]),
             )
+            updated = db.execute(
+                """UPDATE daily_runs SET updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state=?""",
+                (run_id, row["state"]),
+            )
+            if not updated.rowcount:
+                raise InvalidTransition(f"{row['state']} event")
+        return True
 
     def events(self, run_id: str) -> list[dict]:
         with closing(self._connect()) as db, db:

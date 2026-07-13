@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -35,6 +36,62 @@ class RuntimeTests(unittest.TestCase):
             app_dir = Path(directory) / "app"
             app_dir.mkdir()
             self.assertTrue(callable(build_runner(app_dir, preview_only=True).cover))
+
+    def test_runtime_cleanup_deletes_only_an_existing_cover_in_runtime_covers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            covers = app_dir / "static" / "covers"
+            runtime_covers = app_dir / "static" / "runtime-covers"
+            covers.mkdir(parents=True)
+            runtime_covers.mkdir(parents=True)
+            inside = runtime_covers / "inside.png"
+            reference = covers / "inside.png"
+            outside = app_dir / "outside.png"
+            inside.write_text("inside", encoding="utf-8")
+            reference.write_text("reference", encoding="utf-8")
+            outside.write_text("outside", encoding="utf-8")
+
+            cleanup = build_runner(app_dir, preview_only=True).cleanup
+            cleanup({"cover_path": str(inside)})
+            cleanup({"cover_path": str(reference)})
+            cleanup({"cover_path": str(outside)})
+            cleanup({"cover_path": str(runtime_covers / "missing.png")})
+
+            self.assertFalse(inside.exists())
+            self.assertTrue(reference.exists())
+            self.assertTrue(outside.exists())
+
+    def test_runtime_history_cleanup_preserves_the_tracked_reference_cover_with_the_same_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            covers = app_dir / "static" / "covers"
+            runtime_covers = app_dir / "static" / "runtime-covers"
+            covers.mkdir(parents=True)
+            runtime_covers.mkdir(parents=True)
+            source_reference = Path(__file__).parents[1] / "static" / "covers" / "2026-07-02.png"
+            reference_cover = covers / "2026-07-02.png"
+            shutil.copy2(source_reference, reference_cover)
+            reference_bytes = reference_cover.read_bytes()
+            runtime_cover = runtime_covers / "2026-07-02.png"
+            runtime_cover.write_text("runtime", encoding="utf-8")
+
+            runner = build_runner(app_dir, preview_only=True)
+            runner.cleanup({"cover_path": str(reference_cover)})
+            runner.cleanup_date("2026-07-02")
+
+            self.assertFalse(runtime_cover.exists())
+            self.assertTrue(reference_cover.exists())
+            self.assertEqual(reference_cover.read_bytes(), reference_bytes)
+
+    def test_runtime_cover_factory_uses_the_dedicated_runtime_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            app_dir.mkdir()
+
+            cover = build_runner(app_dir, preview_only=True).cover({"date": "2026-07-10"}, {})
+
+            self.assertEqual(Path(cover["cover_path"]).parent, app_dir / "static" / "runtime-covers")
+            self.assertEqual(cover["cover_url"], "/static/runtime-covers/2026-07-10.png")
 
     def test_formal_runner_uses_the_wechat_publisher_directly(self):
         with tempfile.TemporaryDirectory() as directory:
