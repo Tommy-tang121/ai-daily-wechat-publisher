@@ -9,11 +9,35 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from ai_daily.runtime import OpenAiCompatibleLlm, build_runner, load_environment
+from ai_daily.runtime import AihotSource, OpenAiCompatibleLlm, build_runner, load_environment
 from ai_daily.publishing import WeChatPublisher
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_aihot_source_restores_the_original_category_names(self):
+        sections = [
+            ("\u6a21\u578b\u53d1\u5e03/\u66f4\u65b0", "\u6a21\u578b\u76f8\u5173"),
+            ("\u4ea7\u54c1\u53d1\u5e03/\u66f4\u65b0", "\u4ea7\u54c1\u76f8\u5173"),
+            ("\u884c\u4e1a\u52a8\u6001", "\u884c\u4e1a\u52a8\u6001"),
+            ("\u8bba\u6587\u7814\u7a76", "\u8bba\u6587\u7814\u7a76"),
+            ("\u6280\u5de7\u4e0e\u89c2\u70b9", "Agent\u6280\u5de7"),
+        ]
+        payload = {
+            "sections": [
+                {
+                    "label": label,
+                    "items": [{"title": label, "summary": "summary", "sourceName": "source", "permalink": f"https://origin/{index}"}],
+                }
+                for index, (label, _) in enumerate(sections)
+            ]
+        }
+        with patch("requests.get") as request:
+            request.return_value.json.return_value = payload
+
+            items = AihotSource()("2026-07-13")
+
+        self.assertEqual([item["category"] for item in items], [category for _, category in sections])
+
     def test_app_env_overrides_legacy_root_env(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -19,6 +19,25 @@ DEFAULT_SETTINGS = {
 }
 
 
+# Keep the editorial categories from the original daily instead of exposing
+# the source site's changing section labels directly in the article.
+SECTION_LABEL_MAP = {
+    "模型": "模型相关",
+    "产品": "产品相关",
+    "行业": "行业动态",
+    "论文": "论文研究",
+    "观点": "Agent技巧",
+    "Agent": "Agent技巧",
+}
+
+
+def _map_category(section_label: str) -> str:
+    for keyword, category in SECTION_LABEL_MAP.items():
+        if keyword in section_label:
+            return category
+    return "行业动态"
+
+
 def load_environment(app_dir: Path) -> None:
     """Load the new app/.env, then legacy root/.env only when absent."""
     candidates = [app_dir.parent / ".env", app_dir / ".env"]
@@ -60,7 +79,7 @@ class AihotSource:
                             "summary": item.get("summary", ""),
                             "source": item.get("sourceName", ""),
                             "source_url": link,
-                            "category": section.get("label", "行业动态"),
+                            "category": _map_category(section.get("label", "")),
                         }
                     )
         return items

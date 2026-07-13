@@ -139,6 +139,16 @@
       content.appendChild(node("div", "preview-placeholder", "请先选择日期并点击「抓取」"));
       return;
     }
+    const appendEditorial = (label, text) => {
+      if (!text) return;
+      const editorial = node("section", "editor-comment");
+      editorial.append(
+        node("div", "ec-label", label),
+        node("div", "ec-body", text),
+      );
+      content.appendChild(editorial);
+    };
+    appendEditorial("今日观察", article.opening);
     let category = null;
     article.items.forEach((item) => {
       if (item.category !== category) {
@@ -161,6 +171,7 @@
       entry.appendChild(source);
       content.appendChild(entry);
     });
+    appendEditorial("小编短评", article.closing);
   }
 
   function renderCover(article) {

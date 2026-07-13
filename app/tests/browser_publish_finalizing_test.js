@@ -63,7 +63,11 @@ async function runScenario(publishOutcome, publish = true) {
   };
   const readyRun = {
     id: "run-1", date: "2026-07-10", state: "ready", media_id: "", error: "",
-    article: { items: [] }, events: [],
+    article: {
+      opening: "Opening observation",
+      closing: "Closing comment",
+      items: [{ category: "Model group", title: "Story", body: "Body", source: "Source" }],
+    }, events: [],
   };
   const finalizingRun = {
     id: "run-1", date: "2026-07-10", state: "finalizing", media_id: "", error: "",
@@ -151,6 +155,15 @@ async function runScenario(publishOutcome, publish = true) {
   await flush();
   assert.equal(cleaning.storage.get("ai-daily-run-id"), undefined);
   assert.equal(cleaning.elements.get("btnFetch").disabled, false);
+
+  const editorial = await runScenario("published", false);
+  const preview = editorial.elements.get("pvContent").children;
+  assert.equal(preview[0].className, "editor-comment", "opening must render before categories");
+  assert.equal(preview[0].children[0].textContent, "\u4eca\u65e5\u89c2\u5bdf");
+  assert.equal(preview[0].children[1].textContent, "Opening observation");
+  assert.equal(preview[3].className, "editor-comment", "closing must render after all news");
+  assert.equal(preview[3].children[0].textContent, "\u5c0f\u7f16\u77ed\u8bc4");
+  assert.equal(preview[3].children[1].textContent, "Closing comment");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;
