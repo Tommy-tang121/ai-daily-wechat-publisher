@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import date as calendar_date
 from pathlib import Path
 
 from .content import Content
@@ -120,13 +121,26 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
 
     covers_dir = (app_dir / "static" / "covers").resolve()
 
+    def remove_runtime_cover(path: Path) -> None:
+        if path.is_symlink():
+            return
+        resolved = path.resolve()
+        if resolved.is_relative_to(covers_dir) and resolved.is_file():
+            resolved.unlink()
+
     def cleanup(article: dict) -> None:
         cover_path = article.get("cover_path")
         if not cover_path:
             return
-        path = Path(cover_path).resolve()
-        if path.is_relative_to(covers_dir) and path.is_file():
-            path.unlink()
+        remove_runtime_cover(Path(cover_path))
+
+    def cleanup_date(run_date: str) -> None:
+        try:
+            calendar_date.fromisoformat(run_date)
+        except (TypeError, ValueError):
+            return
+        for path in covers_dir.glob(f"{run_date}.*"):
+            remove_runtime_cover(path)
 
     store = Store(app_dir / "data" / "ai_daily.db")
     store.initialize_settings(settings)
@@ -137,4 +151,5 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
         cover=cover,
         settings=settings,
         cleanup=cleanup,
+        cleanup_date=cleanup_date,
     )

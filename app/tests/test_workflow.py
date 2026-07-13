@@ -520,18 +520,41 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(publisher_calls, [])
                 self.assertEqual(store.get(active.id).state, state)
 
-    def test_clear_history_refuses_before_deleting_when_a_run_is_publishing(self):
+    def test_clear_history_never_takes_an_aged_publishing_run_while_the_publisher_finishes(self):
         store = Store(Path(self.tmp.name) / "daily.db")
-        active = self._ready_run(store, "2026-07-10")
-        store.transition(active.id, "publishing")
-        self._published_run(store, "2026-07-11", "draft-1")
+        ready = self._ready_run(store, "2026-07-10", "C:/covers/2026-07-10.png")
+        started = threading.Event()
+        release = threading.Event()
         deleted = []
 
+        def publisher(article):
+            started.set()
+            self.assertTrue(release.wait(1))
+            return "draft-1"
+
+        runner = DailyRun(
+            store,
+            None,
+            publisher,
+            cleanup=lambda article: (_ for _ in ()).throw(RuntimeError("cover still locked")),
+        )
+        result = []
+        worker = threading.Thread(target=lambda: result.append(runner.publish(ready.date)))
+        worker.start()
+        self.assertTrue(started.wait(1))
+        with closing(store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (ready.id,))
+
         with self.assertRaisesRegex(RuntimeError, "active"):
-            DailyRun(store, None, None).clear_history(deleted.append)
+            runner.clear_history(deleted.append)
 
         self.assertEqual(deleted, [])
-        self.assertEqual(store.get(active.id).state, "publishing")
+        self.assertEqual(store.get(ready.id).state, "publishing")
+        release.set()
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(result[0].state, "finalizing")
+        self.assertEqual(store.get(ready.id).state, "finalizing")
 
     def test_clear_history_blocks_a_stale_ready_publish_before_remote_publish(self):
         store = Store(Path(self.tmp.name) / "daily.db")

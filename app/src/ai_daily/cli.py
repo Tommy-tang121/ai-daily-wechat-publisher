@@ -38,6 +38,8 @@ def main():
         settings = runner.settings()
         settings["title"] = f"AI 行业热点新闻 | {run_date}"
         run = runner.prepare(run_date, settings, retry=True)
+        if not getattr(run, "owner", False) and getattr(run, "state", "") in {"queued", "scraping", "rewriting"}:
+            raise RuntimeError("daily run is already active; task scheduler will retry")
         if not args.preview and run.state in {"ready", "finalizing"}:
             runner.publish(run.date)
         return

@@ -1,7 +1,7 @@
 (function () {
   const state = { calYear: 0, calMonth: 0, configLoaded: false, run: null, runId: "", selectedDate: "", timer: null };
   const stepNames = ["scraping", "rewriting", "formatting", "cover", "done"];
-  const activeStates = ["queued", "scraping", "rewriting", "publishing", "finalizing"];
+  const activeStates = ["queued", "scraping", "rewriting", "publishing", "finalizing", "cleaning"];
   const $ = (id) => document.getElementById(id);
   const pad = (value) => String(value).padStart(2, "0");
   const dateValue = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -231,6 +231,13 @@
       $("cornerBadge").textContent = "CLEAN";
       $("fetchHint").textContent = "微信草稿已创建，正在清理本地封面";
       setStatus("running", "微信草稿已创建", "正在清理本地封面，完成后会自动清空页面。");
+    } else if (run.state === "cleaning") {
+      renderArticle(null);
+      renderCover(null);
+      $("btnPublish").disabled = true;
+      $("cornerBadge").textContent = "CLEAN";
+      $("fetchHint").textContent = "正在清理本地临时内容";
+      setStatus("running", "正在清理历史", "清理完成后会自动回到空白页面。");
     } else if (active) {
       const latest = run.events?.at(-1)?.message || "正在处理";
       $("cornerBadge").textContent = "BUSY";

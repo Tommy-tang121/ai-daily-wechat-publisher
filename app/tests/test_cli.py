@@ -146,3 +146,21 @@ class CliTests(unittest.TestCase):
             cli.main()
 
         self.assertEqual(len(runner.publish_calls), 1)
+
+    def test_scheduled_daily_reports_a_recent_non_owner_run_for_task_scheduler_retry(self):
+        class Runner:
+            def settings(self):
+                return {"title": "stale title", "max_words": 150}
+
+            def prepare(self, date_value, settings, retry=False):
+                return type("Run", (), {"date": date_value, "state": "queued", "owner": False})()
+
+            def publish(self, date_value):
+                raise AssertionError("a non-owner run must not be published twice")
+
+        with (
+            patch.object(cli, "build_runner", return_value=Runner()),
+            patch.object(sys, "argv", ["ai-daily", "daily"]),
+            self.assertRaisesRegex(RuntimeError, "already active"),
+        ):
+            cli.main()

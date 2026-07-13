@@ -41,7 +41,7 @@ ACTIVE_STATES = {"queued", "scraping", "rewriting", "publishing"}
 # content. A queued row has no worker yet, so an old worker cannot keep it
 # alive merely by writing a late progress message.
 EVENT_STATES = {"scraping", "rewriting", "ready"}
-HISTORY_BLOCKING_STATES = {"finalizing", "publication_uncertain"}
+HISTORY_BLOCKING_STATES = {"publishing", "finalizing", "publication_uncertain"}
 RECLAIMABLE_STATES = {"queued", "scraping", "rewriting"}
 CLEANUP_LEASE_NAME = "history"
 CLEANUP_LEASE_MINUTES = 5

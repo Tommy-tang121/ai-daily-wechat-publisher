@@ -15,13 +15,14 @@ class PublicationUncertainError(RuntimeError):
 class DailyRun:
     """The sole workflow interface for browser and scheduled execution."""
 
-    def __init__(self, store, content, publisher, cover=None, settings=None, cleanup=None):
+    def __init__(self, store, content, publisher, cover=None, settings=None, cleanup=None, cleanup_date=None):
         self.store = store
         self.content = content
         self.publisher = publisher
         self.cover = cover
         self.default_settings = settings or {}
         self.cleanup = cleanup
+        self.cleanup_date = cleanup_date
 
     def get(self, run_id: str):
         run = self.store.get(run_id)
@@ -56,6 +57,8 @@ class DailyRun:
                 self.store.require_cleanup_lease(owner)
                 if not self._finish_pending_cover_cleanup(run, "history_cover_cleanup_failed"):
                     raise RuntimeError("history cover cleanup failed")
+                if self.cleanup_date:
+                    self.cleanup_date(run.date)
                 if not self.store.discard_if_state(run.id, "cleaning"):
                     raise RuntimeError("history cleanup record changed")
         finally:

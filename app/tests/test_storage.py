@@ -160,8 +160,8 @@ class StoreTests(unittest.TestCase):
 
                 self.assertEqual(store.get(run.id).state, state)
 
-    def test_begin_cleanup_converges_stale_active_states_without_retaining_content(self):
-        for state in ("queued", "scraping", "rewriting", "publishing"):
+    def test_begin_cleanup_converges_stale_pre_publish_states_without_retaining_content(self):
+        for state in ("queued", "scraping", "rewriting"):
             with self.subTest(state=state):
                 store = Store(Path(self._tmp.name) / f"stale-{state}.db")
                 run = store.claim("2026-07-10")

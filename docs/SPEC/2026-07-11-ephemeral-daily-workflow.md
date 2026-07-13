@@ -31,7 +31,7 @@ AI Daily 是“即抓即用”工具，不是日报档案库。文章正文、�
 
 微信端现有 2026-07-11 旧草稿按已保存的草稿回执删除，不自动重新生成。删除请求成功后才删除该条本地回执；若删除失败，仅临时保留日期和回执以便安全重试，不保留文章正文或封面。
 
-开始清理时，候选记录会在同一个本地事务内变为 `cleaning`，并立刻删除正文和运行事件；封面只保留为不可渲染的私有清理路径，草稿回执只供删除接口重试使用，网页不会返回两者。`failed`、`ready`、`published` 和已有的 `cleaning` 记录可以继续清理；`queued`、`scraping`、`rewriting`、`publishing` 只有在超过 30 分钟未更新时才会视为旧残留并清理。抓取或改写的每一次有效进度会原子地刷新这个时间；进入 `cleaning`、`finalizing`、`publication_uncertain` 或 `publishing` 后，旧线程的事件会被拒绝，读取接口也会强制不返回 `cleaning` 的事件。30 分钟内仍在运行的任务，以及 `finalizing`、`publication_uncertain` 任务，都会阻止清理，避免误删正在执行或结果未知的草稿。
+开始清理时，候选记录会在同一个本地事务内变为 `cleaning`，并立刻删除正文和运行事件；封面只保留为不可渲染的私有清理路径，草稿回执只供删除接口重试使用，网页不会返回两者。`failed`、`ready`、`published` 和已有的 `cleaning` 记录可以继续清理；只有 `queued`、`scraping`、`rewriting` 在超过 30 分钟未更新时才会视为旧残留并清理。`publishing` 无论经过多久都阻止清理：下一次状态读取或定时任务检查只会把它收敛为 `publication_uncertain`，绝不接管、重试或再次发布。抓取或改写的每一次有效进度会原子地刷新这个时间；进入 `cleaning`、`finalizing`、`publication_uncertain` 或 `publishing` 后，旧线程的事件会被拒绝，读取接口也会强制不返回 `cleaning` 的事件。30 分钟内仍在运行的任务，以及 `publishing`、`finalizing`、`publication_uncertain` 任务，都会阻止清理，避免误删正在执行或结果未知的草稿。
 
 版本库内用于封面视觉回归测试的图片不是运行时日报数据，不属于这次清理范围。
 

@@ -38,7 +38,7 @@ async function flush() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
-async function runScenario(publishOutcome) {
+async function runScenario(publishOutcome, publish = true) {
   const elements = new Map();
   const timers = [];
   const storage = new Map([["ai-daily-run-id", "run-1"]]);
@@ -69,6 +69,10 @@ async function runScenario(publishOutcome) {
     id: "run-1", date: "2026-07-10", state: "finalizing", media_id: "", error: "",
     article: null, events: [],
   };
+  const cleaningRun = {
+    id: "run-1", date: "2026-07-10", state: "cleaning", media_id: "", error: "",
+    article: null, events: [],
+  };
   const context = {
     console,
     Date,
@@ -93,12 +97,17 @@ async function runScenario(publishOutcome) {
         return response(200, publishOutcome === "finalizing" ? finalizingRun : { ...finalizingRun, state: "published" });
       }
       if (url === "/api/runs/run-1") {
+        if (phase === "restore" && publishOutcome === "cleaning") {
+          phase = "poll-after-cleaning";
+          return response(200, cleaningRun);
+        }
         if (phase === "restore") return response(200, readyRun);
         if (phase === "published" && publishOutcome === "finalizing") {
           phase = "poll-after-finalizing";
           return response(200, finalizingRun);
         }
         if (phase === "poll-after-finalizing") return response(404, { error: "run deleted" });
+        if (phase === "poll-after-cleaning") return response(404, { error: "run deleted" });
       }
       throw new Error(`unexpected request ${method} ${url}`);
     },
@@ -107,8 +116,10 @@ async function runScenario(publishOutcome) {
   vm.createContext(context);
   vm.runInContext(appScript, context, { filename: "app.js" });
   await flush();
-  await elements.get("btnPublish").listeners.click();
-  await flush();
+  if (publish) {
+    await elements.get("btnPublish").listeners.click();
+    await flush();
+  }
   return { elements, requests, storage, timers };
 }
 
@@ -132,6 +143,14 @@ async function runScenario(publishOutcome) {
   assert.equal(failed.elements.get("btnPublish").disabled, false);
   assert.equal(failed.storage.get("ai-daily-run-id"), "run-1");
   assert.equal(failed.timers.some((timer) => timer.delay === 1000), false);
+
+  const cleaning = await runScenario("cleaning", false);
+  const cleaningPoll = cleaning.timers.find((timer) => timer.delay === 1000);
+  assert.ok(cleaningPoll, "history cleanup must keep polling until the run disappears");
+  await cleaningPoll.callback();
+  await flush();
+  assert.equal(cleaning.storage.get("ai-daily-run-id"), undefined);
+  assert.equal(cleaning.elements.get("btnFetch").disabled, false);
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

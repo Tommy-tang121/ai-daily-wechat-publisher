@@ -54,6 +54,21 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(inside.exists())
             self.assertTrue(outside.exists())
 
+    def test_runtime_history_cleanup_removes_only_the_runtime_cover_for_its_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            covers = app_dir / "static" / "covers"
+            covers.mkdir(parents=True)
+            runtime_cover = covers / "2026-07-07.png"
+            reference_cover = covers / "2026-07-07-published.png"
+            runtime_cover.write_text("runtime", encoding="utf-8")
+            reference_cover.write_text("reference", encoding="utf-8")
+
+            build_runner(app_dir, preview_only=True).cleanup_date("2026-07-07")
+
+            self.assertFalse(runtime_cover.exists())
+            self.assertTrue(reference_cover.exists())
+
     def test_formal_runner_uses_the_wechat_publisher_directly(self):
         with tempfile.TemporaryDirectory() as directory:
             app_dir = Path(directory) / "app"
