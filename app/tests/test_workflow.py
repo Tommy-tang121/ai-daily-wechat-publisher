@@ -2,7 +2,6 @@ import sys
 import json
 import tempfile
 import threading
-import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -22,19 +21,20 @@ class WorkflowTests(unittest.TestCase):
 
     @staticmethod
     def valid_llm(messages):
-        payload = json.loads(messages[1]["content"])
-        if "sources" in payload:
-            items = ",".join('{"title":"R","body":"rewritten"}' for _ in payload["sources"])
-            return '{"items":[' + items + ']}'
-        return '{"opening":"今日观察","closing":"小编短评"}'
+        count = messages[1]["content"].count("### 条目 ")
+        return json.dumps({
+            "todayObservation": "今日观察",
+            "items": [
+                {"title": "R", "rewritten": "rewritten"}
+                for _ in range(count)
+            ],
+            "editorComment": "小编短评",
+        })
 
     def test_content_keeps_source_url_and_rejects_bad_result(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         def good(messages):
-            payload = json.loads(messages[1]["content"])
-            if "sources" in payload:
-                return '{"items":[{"title":"R","body":"rewritten","link":"https://wrong"}]}'
-            return '{"opening":"今日观察","closing":"小编短评"}'
+            return '{"todayObservation":"今日观察","items":[{"title":"R","rewritten":"rewritten","link":"https://wrong"}],"editorComment":"小编短评"}'
         article = Content(source, good).build("2026-07-10", {"max_words": 150})
         self.assertEqual(article["items"][0]["source_url"], "https://origin/a")
         with self.assertRaises(ContentError):
@@ -42,42 +42,92 @@ class WorkflowTests(unittest.TestCase):
 
     def test_content_accepts_legacy_rewritten_json_inside_a_code_block(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        raw = '```json\n{"items":[{"title":"R","rewritten":"rewritten"}]}\n```'
-        article = Content(source, lambda messages: raw if "sources" in json.loads(messages[1]["content"]) else '{"opening":"今日观察","closing":"小编短评"}').build("2026-07-10", {})
+        raw = '```json\n{"todayObservation":"今日观察","items":[{"title":"R","rewritten":"rewritten"}],"editorComment":"小编短评"}\n```'
+        article = Content(source, lambda messages: raw).build("2026-07-10", {})
         self.assertEqual(article["items"][0]["body"], "rewritten")
 
-    def test_content_rewrites_all_items_in_safe_batches(self):
-        source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(25)]
+    def test_content_rewrites_a_25_item_daily_in_one_complete_llm_call(self):
+        source = lambda date: [
+            {
+                "title": f"Source {index}",
+                "summary": f"Summary {index}",
+                "source_url": f"https://origin/{index}",
+                "source": "A",
+                "category": "news",
+            }
+            for index in range(25)
+        ]
         calls = []
-        barrier = threading.Barrier(3)
-        def llm(messages):
-            payload = json.loads(messages[1]["content"])
-            if "items" in payload:
-                return '{"opening":"今日观察","closing":"小编短评"}'
-            batch = payload["sources"]
-            barrier.wait(timeout=1)
-            calls.append(len(batch))
-            return '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in batch) + ']}'
-        article = Content(source, llm).build("2026-07-10", {})
-        self.assertEqual(len(article["items"]), 25)
-        self.assertEqual(sorted(calls), [5, 10, 10])
 
-    def test_content_adds_editorial_sections_after_all_batches_finish(self):
+        def llm(messages):
+            calls.append(messages)
+            try:
+                # Supports the old implementation just long enough for this test to prove it is wrong.
+                payload = json.loads(messages[1]["content"])
+            except json.JSONDecodeError:
+                return json.dumps({
+                    "todayObservation": "覆盖全天的观察",
+                    "items": [
+                        {"title": f"Edited {index}", "rewritten": f"Rewritten {index}"}
+                        for index in range(25)
+                    ],
+                    "editorComment": "覆盖全天的短评",
+                })
+            if "sources" in payload:
+                return json.dumps({
+                    "items": [
+                        {"title": item["title"], "body": "Rewritten"}
+                        for item in payload["sources"]
+                    ]
+                })
+            return '{"opening":"覆盖全天的观察","closing":"覆盖全天的短评"}'
+
+        article = Content(source, llm).build("2026-07-10", {"max_words": 150})
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(article["items"]), 25)
+        self.assertEqual(article["opening"], "覆盖全天的观察")
+        self.assertEqual(article["closing"], "覆盖全天的短评")
+        self.assertEqual(article["items"][24]["source_url"], "https://origin/24")
+
+    def test_content_rejects_a_partial_single_response(self):
+        source = lambda date: [
+            {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "news"}
+            for index in range(25)
+        ]
+
+        def llm(messages):
+            return json.dumps({
+                "todayObservation": "今日观察",
+                "items": [
+                    {"title": str(index), "rewritten": "正文"}
+                    for index in range(24)
+                ],
+                "editorComment": "小编短评",
+            })
+
+        with self.assertRaisesRegex(ContentError, "条目不完整"):
+            Content(source, llm).build("2026-07-10", {})
+
+    def test_content_adds_editorial_sections_from_the_same_daily_response(self):
         source = lambda date: [
             {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "行业动态"}
             for index in range(11)
         ]
+        calls = []
 
         def llm(messages):
-            payload = json.loads(messages[1]["content"])
-            if "sources" in payload:
-                items = ",".join('{"title":"R","body":"正文"}' for _ in payload["sources"])
-                return '{"items":[' + items + ']}'
-            self.assertEqual(len(payload["items"]), 11)
-            return '{"opening":"覆盖全天的观察","closing":"覆盖全天的短评"}'
+            calls.append(messages)
+            self.assertEqual(messages[1]["content"].count("### 条目 "), 11)
+            return json.dumps({
+                "todayObservation": "覆盖全天的观察",
+                "items": [{"title": "R", "rewritten": "正文"} for _ in range(11)],
+                "editorComment": "覆盖全天的短评",
+            })
 
-        article = Content(source, llm).build("2026-07-10", {"batch_size": 10})
+        article = Content(source, llm).build("2026-07-10", {})
 
+        self.assertEqual(len(calls), 1)
         self.assertEqual(len(article["items"]), 11)
         self.assertEqual(article["opening"], "覆盖全天的观察")
         self.assertEqual(article["closing"], "覆盖全天的短评")
@@ -85,37 +135,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("**小编短评**", article["markdown"])
         self.assertIn("数据来源：https://aihot.virxact.com/", article["markdown"])
 
-    def test_content_reports_scraping_and_each_finished_rewrite_batch(self):
+    def test_content_reports_one_complete_daily_rewrite(self):
         source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(11)]
         llm = self.valid_llm
         progress = []
-        Content(source, llm).build("2026-07-10", {"batch_size": 10}, progress=lambda *event: progress.append(event))
+        Content(source, llm).build("2026-07-10", {}, progress=lambda *event: progress.append(event))
         self.assertEqual(progress[0][:2], ("scraping", "progress"))
         self.assertEqual(progress[1][:2], ("scraping", "complete"))
-        self.assertEqual(sum(stage == "rewriting" and status == "progress" for stage, status, _ in progress), 2)
-
-    def test_content_never_opens_more_than_three_llm_requests_at_once(self):
-        source = lambda date: [{"title": str(i), "summary": "S", "source_url": f"https://origin/{i}", "source": "A", "category": "news"} for i in range(31)]
-        active = 0
-        highest = 0
-        lock = threading.Lock()
-
-        def llm(messages):
-            nonlocal active, highest
-            with lock:
-                active += 1
-                highest = max(highest, active)
-            time.sleep(0.05)
-            with lock:
-                active -= 1
-            payload = json.loads(messages[1]["content"])
-            if "items" in payload:
-                return '{"opening":"今日观察","closing":"小编短评"}'
-            count = len(payload["sources"])
-            return '{"items":[' + ','.join('{"title":"R","body":"rewritten"}' for _ in range(count)) + ']}'
-
-        Content(source, llm).build("2026-07-09", {"batch_size": 10})
-        self.assertLessEqual(highest, 3)
+        self.assertEqual(progress[2][:2], ("rewriting", "progress"))
+        self.assertIn("全部 11 条", progress[2][2])
+        self.assertEqual(progress[3][:2], ("rewriting", "complete"))
 
     def test_successful_publish_cleans_up_the_persisted_article(self):
         publisher_calls = []
@@ -159,15 +188,15 @@ class WorkflowTests(unittest.TestCase):
             ]
 
         def llm(messages):
-            payload = json.loads(messages[1]["content"])
-            if "sources" in payload:
-                return json.dumps({
-                    "items": [
-                        {"title": f"Edited {item['title']}", "body": "Rewritten"}
-                        for item in payload["sources"]
-                    ]
-                })
-            return json.dumps({"opening": "Opening", "closing": "Closing"})
+            count = messages[1]["content"].count("### 条目 ")
+            return json.dumps({
+                "todayObservation": "Opening",
+                "items": [
+                    {"title": f"Edited {index}", "rewritten": "Rewritten"}
+                    for index in range(count)
+                ],
+                "editorComment": "Closing",
+            })
 
         def cover(article, settings):
             cover_path.write_bytes(b"temporary cover")
