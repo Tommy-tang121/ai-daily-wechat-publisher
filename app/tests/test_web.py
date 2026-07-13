@@ -334,7 +334,7 @@ class WebTests(unittest.TestCase):
         self.assertIsNone(payload["article"])
 
     def test_browser_clears_local_content_after_a_published_empty_response(self):
-        script = create_app(FakeRunner()).test_client().get("/static/app.js").data
+        script = create_app(FakeRunner()).test_client().get("/static/app.js").data.replace(b"\r\n", b"\n")
 
         self.assertIn(b'run.state === "published" && !run.article', script)
         self.assertIn(b'stopPolling();\n      state.run = null;', script)
