@@ -1,39 +1,110 @@
 <!doctype html>
 <html lang="zh-CN">
-<meta charset="utf-8">
-<title>AI Daily UI / UX Reference</title>
-<style>
-  body { max-width: 960px; margin: 40px auto; padding: 0 24px; color: #2a2620; background: #c9b888; font: 16px Georgia, "Microsoft YaHei", serif; line-height: 1.65; }
-  main { background: #f2e4bd; border: 2px solid #2a2620; box-shadow: 6px 6px #2a2620; padding: 32px; }
-  h1, h2 { margin-top: 0; } h2 { border-top: 1px dashed #8c847a; padding-top: 18px; margin-top: 30px; }
-  code { background: #fff7df; padding: 2px 5px; } table { width: 100%; border-collapse: collapse; }
-  th, td { border: 1px solid #8c847a; padding: 8px; text-align: left; }
-  .flow { padding: 14px; background: #fff7df; border-left: 4px solid #e63946; }
-</style>
-<main>
-  <h1>AI Daily UI / UX 参考</h1>
-  <p>视觉方向保持“手绘日报 / 草稿本”：暖纸色、墨色边框、手写感标题、喷漆状态标签。实际页面在 <code>app/templates/index.html</code>、<code>app/static/style.css</code> 和 <code>app/static/app.js</code>。</p>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Daily UI / UX 同步参考</title>
+  <style>
+    :root { --paper:#F2E4BD; --paper-warm:#EDDDB0; --paper-edge:#D8C58E; --ink:#2A2620; --ink-soft:#5A5249; --ink-faint:#8C847A; --red:#E63946; --orange:#F77F00; --yellow:#FFB627; --green:#2A7D2E; --line:rgba(42,38,32,.16); --coffee:rgba(101,67,33,.15); }
+    * { box-sizing:border-box; } body { max-width:1120px; margin:0 auto; padding:32px 20px; background:#C9B888; color:var(--ink); font:15px/1.7 Georgia,"Microsoft YaHei",serif; }
+    main { background:var(--paper); border:2px solid var(--ink); border-radius:4px 20px 4px 24px; box-shadow:6px 6px 0 var(--ink); padding:28px; }
+    h1,h2,h3 { margin:0 0 12px; } h1 { font-style:italic; } h2 { margin-top:32px; padding-top:16px; border-top:1px dashed var(--ink-faint); } h3 { margin-top:20px; color:var(--ink-soft); }
+    table { width:100%; border-collapse:collapse; margin:12px 0; } th,td { border:1px solid var(--ink-faint); padding:8px; text-align:left; vertical-align:top; } th { background:var(--paper-warm); }
+    code { padding:1px 4px; background:#fff7df; } .flow,.notice { padding:14px; border-left:4px solid var(--red); background:#fff7df; } .notice { border-left-color:var(--orange); }
+    .swatches { display:flex; flex-wrap:wrap; gap:8px; } .swatch { min-width:118px; padding:10px; border:1px solid var(--ink); } .dot { display:inline-block; width:14px; height:14px; border-radius:50%; margin-right:6px; vertical-align:-2px; }
+    .mock { display:grid; grid-template-columns:250px 1fr; gap:18px; padding:18px; background:#C9B888; border:1px dashed var(--ink-faint); } .panel { padding:16px; background:var(--paper); border:2px solid var(--ink); box-shadow:4px 4px 0 var(--ink); }
+    .hand { font-family:cursive; font-weight:bold; } .tag { display:inline-block; padding:3px 10px; border-radius:14px 4px 14px 4px; color:white; font-family:cursive; font-weight:bold; } .idle { background:var(--ink-soft); } .run { background:var(--orange); } .ready,.done { background:var(--green); } .fail { background:var(--red); } .check { background:var(--red); }
+    .timeline { margin:10px 0; } .step { padding:4px 0 4px 26px; position:relative; } .step::before { content:""; position:absolute; left:4px; top:9px; width:14px; height:14px; border:2px solid var(--orange); border-radius:50%; } .step.done::before { background:var(--green); border-color:var(--green); } .step.fail::before { background:var(--red); border-color:var(--red); }
+    @media (max-width:860px) { body { padding:16px; } main { padding:20px; } .mock { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1><span style="color:#E63946">AI</span> Daily · UI / UX 同步参考</h1>
+    <p>同步日期：2026-07-13。此页以 <code>app/templates/index.html</code>、<code>app/static/style.css</code>、<code>app/static/app.js</code> 的实际实现为准，可直接离线打开。视觉主题是“暖色草稿本上的手写 AI 日报”。</p>
 
-  <h2>保留的页面结构</h2>
-  <table>
-    <tr><th>左栏</th><td>日期日历、抓取、五段时间线、字数限制</td></tr>
-    <tr><th>主栏</th><td>标题、作者、正文/封面切换、状态栏、定时、复制、发布</td></tr>
-    <tr><th>状态</th><td>IDLE、RUNNING、READY、DONE、FAILED</td></tr>
-  </table>
+    <h2>1. 视觉基础</h2>
+    <table>
+      <tr><th>元素</th><th>实际使用</th><th>用途</th></tr>
+      <tr><td>字体</td><td><code>Caveat</code>、<code>Lora</code>、<code>ZCOOL KuaiLe</code>，均由 <code>/fonts/</code> 本地提供</td><td>不依赖在线字体；手写标题、正文和中文装饰分别使用不同字体。</td></tr>
+      <tr><td>整体背景</td><td><code>#C9B888</code>，带横竖纸张格线和咖啡渍渐变</td><td>作为两栏草稿本的外部桌面。</td></tr>
+      <tr><td>纸张面板</td><td><code>--paper #F2E4BD</code>、墨色 2px 边框、6px 硬阴影、不规则圆角</td><td>左侧控制栏和右侧日报本体。</td></tr>
+      <tr><td>交互反馈</td><td>橙色进行中、绿色完成、红色失败、黄色封面步骤</td><td>贯穿时间线、徽章、通知和表单焦点。</td></tr>
+    </table>
+    <div class="swatches">
+      <div class="swatch"><span class="dot" style="background:#F2E4BD"></span><code>--paper</code><br>#F2E4BD</div>
+      <div class="swatch"><span class="dot" style="background:#2A2620"></span><code>--ink</code><br>#2A2620</div>
+      <div class="swatch"><span class="dot" style="background:#E63946"></span><code>--spray-red</code><br>#E63946</div>
+      <div class="swatch"><span class="dot" style="background:#F77F00"></span><code>--spray-orange</code><br>#F77F00</div>
+      <div class="swatch"><span class="dot" style="background:#FFB627"></span><code>--spray-yellow</code><br>#FFB627</div>
+      <div class="swatch"><span class="dot" style="background:#2A7D2E"></span>完成绿<br>#2A7D2E</div>
+    </div>
 
-  <h2>当前交互</h2>
-  <div class="flow">
-    选择日期 → <code>POST /api/runs</code> → 轮询 <code>GET /api/runs/&lt;id&gt;</code> → 用持久化事件更新时间线 → ready 后显示正文与封面 → 可复制或创建微信草稿。
-  </div>
-  <p>页面不再使用 SSE、<code>/api/fetch</code> 或全局文章变量。模型与抓取内容均用 DOM 节点的 <code>textContent</code> 渲染。</p>
+    <h2>2. 页面结构与尺寸</h2>
+    <div class="mock">
+      <section class="panel"><strong class="hand">左栏 controls</strong><br>AI Daily 标志<br>日期日历<br>日期与星期标签<br>抓取按钮<br>五段时间线<br>错误卡片（隐藏到失败）<br>字数限制</section>
+      <section class="panel"><strong class="hand">右栏 mockup</strong><br>手写大标题<br>标题、作者输入框<br>正文预览 / 封面预览切换<br>滚动预览区域<br>状态条、定时时间、复制、发布<br><br><small>桌面宽度：整体最大 1200px；左栏 280px，栏间距 24px。页面高度锁定为视窗高度，正文预览内部滚动。</small></section>
+    </div>
+    <p>右上角有倾斜的喷漆状态标签；正文区域含两个不可交互的咖啡渍装饰。小于 <code>860px</code> 时两栏改为单列，状态区纵向排列，右上状态标签隐藏。</p>
 
-  <h2>定时交互</h2>
-  <p>点击时间旁的“保存”调用 <code>POST /api/schedule</code>。成功才显示“每日定时任务已更新”；它不是只保存一个页面字段。</p>
+    <h2>3. 组件与状态</h2>
+    <table>
+      <tr><th>组件</th><th>默认状态</th><th>交互 / 其他状态</th></tr>
+      <tr><td>日历</td><td>显示当前月，今天有浅色底，未选择日期时自动选中今天。</td><td>左右箭头切月；选择日期后日期变深色并更新标题为“AI 行业热点新闻 | 日期”。</td></tr>
+      <tr><td>抓取按钮</td><td>纸张底、墨色边、旋转箭头图标。</td><td>悬停上移 2px、阴影加深；运行中禁用并降至 40% 不透明度。</td></tr>
+      <tr><td>五段时间线</td><td>抓取、重写、排版、封面、完成均显示“等待中”。</td><td>进行中：橙色圆点呼吸；完成：绿色勾选并弹跳；失败：红色叉和摇晃。步骤由后端事件驱动。</td></tr>
+      <tr><td>错误卡片</td><td>隐藏。</td><td>运行失败后显示 FAILED、红色满进度条和安全错误摘要。</td></tr>
+      <tr><td>标题 / 作者 / 字数</td><td>标题和作者是单行输入；字数为 50–500 的数字框。</td><td>字段失焦变更时立即保存到本地 SQLite；焦点边线变橙色。</td></tr>
+      <tr><td>正文 / 封面预览</td><td>正文标签激活，未生成时显示“请先选择日期并点击抓取”。</td><td>正文按“今日观察 → 分类 → 标题 / 正文 / 来源链接 → 小编短评”渲染；封面标签展示当前运行的 900×500 图片。</td></tr>
+      <tr><td>编辑点评</td><td>正文中没有数据时不显示。</td><td>今日观察和小编短评均用浅橙背景、橙色左边线、手写栏目名。</td></tr>
+      <tr><td>复制 / 发布</td><td>复制始终可点；发布在文章 ready 前禁用。</td><td>复制写入浏览器剪贴板；发布成功后清空本地预览和运行标记，避免保留日报历史。</td></tr>
+      <tr><td>定时保存</td><td>时间输入框加“保存”按钮。</td><td>保存调用 Windows 计划任务接口；成功 / 失败均以右下角 Toast 提示。</td></tr>
+    </table>
 
-  <h2>关键文案</h2>
-  <ul>
-    <li>生成完成：<strong>文章已生成，尚未发布</strong></li>
-    <li>发布完成：<strong>微信草稿已创建</strong></li>
-    <li>失败：显示安全错误摘要并允许重试</li>
-  </ul>
-</main>
+    <h3>运行状态徽章</h3>
+    <p><span class="tag idle">IDLE</span> 等待操作　<span class="tag run">RUNNING...</span> 抓取、重写或清理中　<span class="tag ready">READY</span> 可预览和发布　<span class="tag done">DONE</span> 草稿已创建　<span class="tag fail">FAIL</span> 生成失败　<span class="tag check">CHECK</span> 发布结果待人工确认。</p>
+
+    <h2>4. 页面状态流转</h2>
+    <div class="flow">
+      选择日期 → 保存标题、作者、字数 → <code>POST /api/runs</code> → <code>queued / scraping / rewriting</code> → 每秒轮询 <code>GET /api/runs/&lt;id&gt;</code> → <code>ready</code>（展示正文和封面） → 用户发布 → <code>publishing</code> → <code>finalizing</code> → 清除本地内容并回到空白页面。<br><br>
+      失败路径：内容阶段失败 → <code>failed</code> → 可重新抓取。微信调用结果不确定 → <code>publication_uncertain</code> → 用户先核对微信草稿箱，再在确认提示中重新生成。
+    </div>
+    <div class="timeline">
+      <div class="step done">抓取：开始、完成</div>
+      <div class="step done">重写：一次改写当天全部资讯并返回完整文章</div>
+      <div class="step done">排版：确定性 Markdown 组装完成</div>
+      <div class="step done">封面：生成 900×500 本地临时封面</div>
+      <div class="step">完成：文章已生成，尚未发布</div>
+      <div class="step fail">错误：失败步骤显示后端错误摘要</div>
+    </div>
+
+    <h2>5. 事件绑定与接口</h2>
+    <table>
+      <tr><th>页面元素</th><th>事件</th><th>实际行为</th></tr>
+      <tr><td>日历前后箭头</td><td>click</td><td>仅改变显示月份，不请求后端。</td></tr>
+      <tr><td>某个日期</td><td>click</td><td>选中日期、更新日报标题、保存标题设置。</td></tr>
+      <tr><td>标题 / 作者 / 字数</td><td>change</td><td><code>POST /api/config</code> 保存设置。</td></tr>
+      <tr><td>抓取</td><td>click</td><td><code>POST /api/runs</code>，随后每 1000ms 轮询运行记录。遇到待确认状态，先弹出浏览器确认框。</td></tr>
+      <tr><td>正文 / 封面标签</td><td>click</td><td>切换预览区域，不重新生成内容。</td></tr>
+      <tr><td>复制</td><td>click</td><td>复制当前正文预览的纯文本到剪贴板。</td></tr>
+      <tr><td>发布</td><td>click</td><td><code>POST /api/runs/&lt;id&gt;/publish</code>；仅 ready 状态可用。</td></tr>
+      <tr><td>定时保存</td><td>click</td><td><code>POST /api/schedule</code> 更新唯一 Windows 任务 <code>AI Daily Publisher</code>。</td></tr>
+    </table>
+    <p>页面<strong>不使用 SSE</strong>；使用 HTTP 轮询和持久化事件。浏览器把当前 <code>run_id</code> 放在 <code>localStorage</code>，刷新后尝试恢复；已清理或已发布的运行返回 404 时会自动清空页面。</p>
+
+    <h2>6. 动效与可访问性边界</h2>
+    <table>
+      <tr><th>动效</th><th>实现</th><th>时长</th></tr>
+      <tr><td>进行中时间线</td><td><code>tl-pulse</code> 扩散阴影</td><td>1.2s 循环</td></tr>
+      <tr><td>完成时间线</td><td><code>tl-pop</code> 0.6→1.2→1 缩放</td><td>0.3s</td></tr>
+      <tr><td>失败步骤</td><td><code>shake</code></td><td>0.4s</td></tr>
+      <tr><td>右上状态标签</td><td><code>tag-swing</code> 摆动</td><td>3s 循环</td></tr>
+      <tr><td>Toast</td><td><code>tin</code> 从下方淡入</td><td>0.25s；3 秒后由 JavaScript 移除</td></tr>
+    </table>
+    <p>模型和抓取内容均通过 DOM 的 <code>textContent</code> 插入，不当作 HTML 执行；来源链接单独设为 <code>target=&quot;_blank&quot;</code> 和 <code>rel=&quot;noreferrer&quot;</code>。</p>
+
+    <h2>7. 当前已知文案偏差</h2>
+    <div class="notice">后端已在 2026-07-13 改为“一次模型调用处理当天全部资讯”，但处理中状态详情仍有旧文案“全量内容按批并行改写，通常约 1–2 分钟”。这是 <code>app/static/app.js</code> 的显示文案遗留，不影响实际生成流程；本次“同步一下”只同步文档，未改动业务或前端代码。</div>
+  </main>
+</body>
+</html>
