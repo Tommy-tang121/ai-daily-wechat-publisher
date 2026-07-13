@@ -256,6 +256,12 @@ class WebTests(unittest.TestCase):
             store.transition(run.id, "publishing")
             store.mark_published(run.id, "draft-1")
             store.begin_cleanup("cleanup-owner")
+            store.record_event(run.id, "error", "error", "late worker event")
+            with closing(store._connect()) as db, db:
+                db.execute(
+                    "INSERT INTO run_events(run_id, stage, status, message) VALUES (?, ?, ?, ?)",
+                    (run.id, "error", "error", "corrupt event"),
+                )
             response = create_app(DailyRun(store, None, None)).test_client().get(f"/api/runs/{run.id}")
 
         payload = response.get_json()

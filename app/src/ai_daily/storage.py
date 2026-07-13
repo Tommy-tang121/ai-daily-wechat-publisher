@@ -37,6 +37,10 @@ ALLOWED = {
 }
 
 ACTIVE_STATES = {"queued", "scraping", "rewriting", "publishing"}
+# Events are a liveness heartbeat only once a worker is actually processing
+# content. A queued row has no worker yet, so an old worker cannot keep it
+# alive merely by writing a late progress message.
+EVENT_STATES = {"scraping", "rewriting", "ready"}
 HISTORY_BLOCKING_STATES = {"finalizing", "publication_uncertain"}
 RECLAIMABLE_STATES = {"queued", "scraping", "rewriting"}
 CLEANUP_LEASE_NAME = "history"
@@ -368,15 +372,26 @@ class Store:
         run = self.get(run_id)
         return Run(run.id, run.date, run.state, True, run.media_id, run.article, run.error)
 
-    def record_event(self, run_id: str, stage: str, status: str, message: str) -> None:
+    def record_event(self, run_id: str, stage: str, status: str, message: str) -> bool:
         with closing(self._connect()) as db, db:
-            exists = db.execute("SELECT 1 FROM daily_runs WHERE id=?", (run_id,)).fetchone()
-            if not exists:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT state FROM daily_runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
                 raise KeyError(run_id)
+            if row["state"] not in EVENT_STATES:
+                return False
             db.execute(
                 "INSERT INTO run_events(run_id, stage, status, message) VALUES (?, ?, ?, ?)",
                 (run_id, stage, status, message[:500]),
             )
+            updated = db.execute(
+                """UPDATE daily_runs SET updated_at=CURRENT_TIMESTAMP
+                   WHERE id=? AND state=?""",
+                (run_id, row["state"]),
+            )
+            if not updated.rowcount:
+                raise InvalidTransition(f"{row['state']} event")
+        return True
 
     def events(self, run_id: str) -> list[dict]:
         with closing(self._connect()) as db, db:

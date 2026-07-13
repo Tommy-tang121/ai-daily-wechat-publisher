@@ -55,7 +55,6 @@ class StoreTests(unittest.TestCase):
             with self.subTest(state=state):
                 date = f"2026-07-{11 + len(state)}"
                 old = self.store.claim(date)
-                self.store.record_event(old.id, "scraping", "progress", "Old run")
                 if state == "ready":
                     self.store.transition(old.id, "scraping")
                     self.store.transition(old.id, "rewriting")
@@ -68,6 +67,14 @@ class StoreTests(unittest.TestCase):
                     self.store.save_article(old.id, {"markdown": "article"})
                     self.store.transition(old.id, "publishing")
                     self.store.mark_published(old.id, "media-1")
+                # This test protects claim_fresh only. Insert a pre-existing
+                # legacy event directly because terminal states now reject
+                # late worker events by design.
+                with closing(self.store._connect()) as db, db:
+                    db.execute(
+                        "INSERT INTO run_events(run_id, stage, status, message) VALUES (?, ?, ?, ?)",
+                        (old.id, "scraping", "progress", "Old run"),
+                    )
 
                 fresh = self.store.claim_fresh(date)
 
@@ -261,7 +268,9 @@ class StoreTests(unittest.TestCase):
 
     def test_events_are_persisted_in_the_order_they_happened(self):
         run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
         self.store.record_event(run.id, "scraping", "progress", "Fetching sources")
+        self.store.transition(run.id, "rewriting")
         self.store.record_event(run.id, "rewriting", "progress", "Rewriting batch 1 of 3")
         self.assertEqual(
             self.store.events(run.id),
@@ -270,6 +279,41 @@ class StoreTests(unittest.TestCase):
                 {"stage": "rewriting", "status": "progress", "message": "Rewriting batch 1 of 3"},
             ],
         )
+
+    def test_active_event_refreshes_stale_timeout_for_safe_reclaim(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        with closing(self.store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+
+        recorded = self.store.record_event(run.id, "scraping", "progress", "Still fetching")
+        reclaimed = self.store.reclaim_stale(run.id, minutes=30)
+
+        self.assertTrue(recorded)
+        self.assertEqual(reclaimed.state, "scraping")
+        self.assertFalse(reclaimed.owner)
+
+    def test_queued_event_cannot_renew_an_unstarted_run(self):
+        run = self.store.claim("2026-07-10")
+        with closing(self.store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+
+        recorded = self.store.record_event(run.id, "scraping", "progress", "late worker event")
+        reclaimed = self.store.reclaim_stale(run.id, minutes=30)
+
+        self.assertFalse(recorded)
+        self.assertEqual(self.store.events(run.id), [])
+        self.assertTrue(reclaimed.owner)
+
+    def test_record_event_ignores_a_cleaning_run(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "failed", "source unavailable")
+        self.store.begin_cleanup("cleanup-owner")
+
+        recorded = self.store.record_event(run.id, "error", "error", "late worker event")
+
+        self.assertFalse(recorded)
+        self.assertEqual(self.store.events(run.id), [])
 
     def test_settings_keep_defaults_and_persist_user_changes(self):
         defaults = {"title": "Daily", "max_words": 150}

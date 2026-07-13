@@ -486,7 +486,6 @@ class WorkflowTests(unittest.TestCase):
     def test_clear_history_discards_a_stale_queued_legacy_run_without_publishing(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         stale = store.claim("2026-07-07")
-        store.record_event(stale.id, "scraping", "progress", "legacy progress")
         with closing(store._connect()) as db, db:
             db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (stale.id,))
         publisher_calls = []
@@ -500,6 +499,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(deleted, [])
         with self.assertRaises(KeyError):
             store.get(stale.id)
+
+    def test_active_progress_prevents_history_cleanup_and_publisher_calls(self):
+        for state in ("scraping", "rewriting"):
+            with self.subTest(state=state):
+                store = Store(Path(self.tmp.name) / f"{state}.db")
+                active = store.claim("2026-07-10")
+                store.transition(active.id, "scraping")
+                if state == "rewriting":
+                    store.transition(active.id, "rewriting")
+                with closing(store._connect()) as db, db:
+                    db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (active.id,))
+                store.record_event(active.id, state, "progress", "Still working")
+                publisher_calls = []
+                runner = DailyRun(store, None, lambda article: publisher_calls.append(article))
+
+                with self.assertRaisesRegex(RuntimeError, "active"):
+                    runner.clear_history(lambda media_id: None)
+
+                self.assertEqual(publisher_calls, [])
+                self.assertEqual(store.get(active.id).state, state)
 
     def test_clear_history_refuses_before_deleting_when_a_run_is_publishing(self):
         store = Store(Path(self.tmp.name) / "daily.db")

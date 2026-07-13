@@ -119,8 +119,9 @@ def create_app(runner, settings=None, tasks=None):
     @app.get("/api/runs/<run_id>")
     def read(run_id):
         try:
-            payload = _payload(runner.get(run_id))
-            payload["events"] = runner.events(run_id)
+            run = runner.get(run_id)
+            payload = _payload(run)
+            payload["events"] = [] if run.state == "cleaning" else runner.events(run_id)
             return jsonify(payload)
         except KeyError:
             return jsonify(error="运行记录不存在"), 404

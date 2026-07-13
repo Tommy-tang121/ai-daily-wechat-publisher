@@ -161,8 +161,8 @@ class DailyRun:
         if not run.owner:
             return run
         logger.info("run=%s stage=scraping", run.id)
-        self.store.record_event(run.id, "scraping", "progress", "开始抓取当日资讯")
         started = self.store.transition(run.id, "scraping")
+        self.store.record_event(run.id, "scraping", "progress", "开始抓取当日资讯")
         return replace(started, owner=True)
 
     def execute(self, run_id: str, date: str, settings: dict):
