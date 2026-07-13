@@ -713,6 +713,53 @@ class WorkflowTests(unittest.TestCase):
         run = DailyRun(store, Content(source, llm), None).prepare("2026-07-10", {}, retry=True)
         self.assertEqual(run.state, "ready")
 
+    def test_retry_starts_a_new_queued_run_and_executes_it(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        source = lambda date: [
+            {"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}
+        ]
+        runner = DailyRun(store, Content(source, self.valid_llm), None)
+
+        started = runner.start("2026-07-10", {}, retry=True)
+        completed = runner.execute(started.id, "2026-07-10", {})
+
+        self.assertTrue(started.owner)
+        self.assertEqual(started.state, "scraping")
+        self.assertEqual(completed.state, "ready")
+
+    def test_fresh_generation_reclaims_stale_prepublication_states_and_executes(self):
+        source = lambda date: [
+            {"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}
+        ]
+        for state in ("queued", "scraping", "rewriting"):
+            with self.subTest(state=state):
+                store = Store(Path(self.tmp.name) / f"fresh-{state}.db")
+                stale = store.claim("2026-07-10")
+                if state in {"scraping", "rewriting"}:
+                    store.transition(stale.id, "scraping")
+                if state == "rewriting":
+                    store.transition(stale.id, "rewriting")
+                with closing(store._connect()) as db, db:
+                    db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (stale.id,))
+                runner = DailyRun(store, Content(source, self.valid_llm), None)
+
+                started = runner.start("2026-07-10", {}, fresh=True)
+                completed = runner.execute(started.id, "2026-07-10", {})
+
+                self.assertTrue(started.owner)
+                self.assertEqual(started.state, "scraping")
+                self.assertEqual(completed.state, "ready")
+
+    def test_fresh_generation_does_not_hijack_an_active_queued_run(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        active = store.claim("2026-07-10")
+
+        waiting = DailyRun(store, None, None).start("2026-07-10", {}, fresh=True)
+
+        self.assertFalse(waiting.owner)
+        self.assertEqual(waiting.id, active.id)
+        self.assertEqual(waiting.state, "queued")
+
     def test_prepare_fresh_cleans_the_old_cover_before_replacing_a_ready_run(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]

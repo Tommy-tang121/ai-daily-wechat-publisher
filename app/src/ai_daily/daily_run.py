@@ -2,7 +2,7 @@ from dataclasses import replace
 import logging
 import uuid
 
-from .storage import InvalidTransition
+from .storage import InvalidTransition, RECLAIMABLE_STATES
 
 
 logger = logging.getLogger("ai_daily")
@@ -119,6 +119,10 @@ class DailyRun:
             if run.owner:
                 return run
             run = self._recover_stale_publication(run)
+            if run.state in RECLAIMABLE_STATES:
+                run = self.store.reclaim_stale(run.id, minutes=30)
+                if run.owner:
+                    return run
             if run.state == "finalizing":
                 completed = self._finish_finalization(run)
                 try:
@@ -151,7 +155,9 @@ class DailyRun:
         resolve_uncertain: bool = False,
     ):
         run = self._claim_fresh(date, resolve_uncertain) if fresh else self.store.claim(date)
-        if not fresh:
+        # A newly claimed run already belongs to this caller. Reclaiming it
+        # would return an observer snapshot and prevent its first execution.
+        if not fresh and not run.owner:
             if retry:
                 run = self._recover_stale_publication(run)
             if retry and run.state == "failed":

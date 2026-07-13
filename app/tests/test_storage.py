@@ -346,6 +346,41 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(reclaimed.owner)
         self.assertEqual(reclaimed.state, "queued")
 
+    def test_reclaim_stale_returns_the_current_cleanup_state_after_a_race(self):
+        run = self.store.claim("2026-07-10")
+        self.store.transition(run.id, "scraping")
+        with closing(self.store._connect()) as db, db:
+            db.execute("UPDATE daily_runs SET updated_at=datetime('now', '-31 minutes') WHERE id=?", (run.id,))
+        original_connect = self.store._connect
+        concurrent_store = Store(self.temp)
+
+        class InterleavingConnection:
+            def __init__(self, connection):
+                self.connection = connection
+                self.started_cleanup = False
+
+            def __enter__(self):
+                self.connection.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.connection.__exit__(*args)
+
+            def close(self):
+                self.connection.close()
+
+            def execute(self, sql, parameters=()):
+                if sql.startswith("UPDATE daily_runs SET state='queued'") and not self.started_cleanup:
+                    self.started_cleanup = True
+                    concurrent_store.begin_cleanup("cleanup-owner")
+                return self.connection.execute(sql, parameters)
+
+        with patch.object(self.store, "_connect", side_effect=lambda: InterleavingConnection(original_connect())):
+            reclaimed = self.store.reclaim_stale(run.id, minutes=30)
+
+        self.assertFalse(reclaimed.owner)
+        self.assertEqual(reclaimed.state, "cleaning")
+
     def test_stale_queued_run_can_be_safely_reclaimed_for_retry(self):
         run = self.store.claim("2026-07-10")
         with closing(self.store._connect()) as db, db:

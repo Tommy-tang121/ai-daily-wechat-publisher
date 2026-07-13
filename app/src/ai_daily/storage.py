@@ -364,11 +364,11 @@ class Store:
                 return self._run(row)
             result = db.execute(
                 """UPDATE daily_runs SET state='queued', error='', updated_at=CURRENT_TIMESTAMP
-                   WHERE id=? AND updated_at < datetime('now', ?)""",
-                (run_id, age),
+                   WHERE id=? AND state=? AND updated_at < datetime('now', ?)""",
+                (run_id, row["state"], age),
             )
             if not result.rowcount:
-                return self._run(row)
+                return self.get(run_id)
         run = self.get(run_id)
         return Run(run.id, run.date, run.state, True, run.media_id, run.article, run.error)
 
