@@ -104,6 +104,18 @@ class PublishingTests(unittest.TestCase):
         self.assertEqual(command[command.index("--cover") + 1], article["cover_path"])
         self.assertEqual(run.call_args.kwargs.get("encoding"), "utf-8")
 
+    def test_publisher_fallback_generates_a_cover_in_the_runtime_directory(self):
+        article = {"date": "2026-07-10", "markdown": "article"}
+        completed = SimpleNamespace(returncode=0, stdout='{"success":true,"media_id":"draft-1"}', stderr="")
+        with (
+            patch("ai_daily.publishing.shutil.which", return_value="bun"),
+            patch("ai_daily.publishing.generate_cover", return_value=Path("runtime-cover.png")) as generate_cover,
+            patch("ai_daily.publishing.subprocess.run", return_value=completed),
+        ):
+            WeChatPublisher("title")(article)
+
+        self.assertEqual(generate_cover.call_args.args[0], Path(__file__).parents[1] / "static" / "runtime-covers")
+
     def test_publisher_uses_the_title_persisted_with_the_article(self):
         article = {"date": "2026-07-10", "title": "AI 行业热点新闻 | 2026-07-10", "markdown": "article", "cover_path": "C:/covers/2026-07-10.png"}
         completed = SimpleNamespace(returncode=0, stdout='{"success":true,"media_id":"draft-1"}', stderr="")

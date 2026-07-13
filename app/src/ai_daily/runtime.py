@@ -112,20 +112,20 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
 
     def cover(article: dict, values: dict) -> dict:
         path = generate_cover(
-            app_dir / "static" / "covers",
+            app_dir / "static" / "runtime-covers",
             article["date"],
             values.get("title", settings["title"]),
             values.get("author", settings["author"]),
         )
-        return {"cover_path": str(path), "cover_url": f"/static/covers/{path.name}"}
+        return {"cover_path": str(path), "cover_url": f"/static/runtime-covers/{path.name}"}
 
-    covers_dir = (app_dir / "static" / "covers").resolve()
+    runtime_covers_dir = (app_dir / "static" / "runtime-covers").resolve()
 
     def remove_runtime_cover(path: Path) -> None:
         if path.is_symlink():
             return
         resolved = path.resolve()
-        if resolved.is_relative_to(covers_dir) and resolved.is_file():
+        if resolved.is_relative_to(runtime_covers_dir) and resolved.is_file():
             resolved.unlink()
 
     def cleanup(article: dict) -> None:
@@ -139,7 +139,7 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
             calendar_date.fromisoformat(run_date)
         except (TypeError, ValueError):
             return
-        for path in covers_dir.glob(f"{run_date}.*"):
+        for path in runtime_covers_dir.glob(f"{run_date}.*"):
             remove_runtime_cover(path)
 
     store = Store(app_dir / "data" / "ai_daily.db")

@@ -20,10 +20,10 @@ __pycache__/
 *.pyc
 *.pyo
 app/.venv/
-app/static/covers/*.png
+app/static/runtime-covers/
 
-# 生成的封面图片（可按需保留或取消注释）
-# app/static/covers/
+# 生成的运行时封面图片（可按需保留或取消注释）
+# app/static/runtime-covers/
 
 # 日志
 app/logs/

@@ -14,14 +14,14 @@ Flask + 原生 JavaScript 只负责页面与 API。`DailyRun` 是网页与 Windo
 ## 状态
 
 ```text
-queued -> scraping -> rewriting -> ready -> publishing -> published -> 清除本地运行、文章、事件和封面
-                          \-> failed               \-> failed
+queued -> scraping -> rewriting -> ready -> publishing -> finalizing -> 清除本地运行、文章、事件和封面
+                          \-> failed               \-> publication_uncertain -> 人工核对微信草稿箱
 ```
 
 - 日期唯一：同一天处理中的、`ready` 或失败运行不会重复生成或发布；网页手动选择日期会以 fresh 模式重新生成可替换的旧内容。
 - `ready` 表示文章和封面已临时保留，尚未发布。
-- `published` 必须先获得非空微信草稿回执；随后立即清除本地文章、事件、封面和运行记录。
-- 调用微信草稿发布器前的内容阶段失败可明确重试；一旦开始调用发布器，任何异常或远端结果不确定都进入 `publication_uncertain`，绝不自动再次发布。抓取或改写的有效进度会刷新运行心跳，只有连续超过 30 分钟没有进度的排队、抓取或改写任务才可被计划任务安全接管；过期 `publishing` 只会收敛为待确认状态，绝不重发。
+- `finalizing` 表示已收到非空微信草稿回执，正在清除本地文章、事件、封面和运行记录；清理完成后接口只返回临时的 `published` 结果，本地不保留该状态。
+- 调用微信草稿发布器前的内容阶段失败可明确重试；一旦进入 `publishing`，成功只能进入 `finalizing`，任何异常或远端结果不确定都进入 `publication_uncertain`。两条路径都绝不自动再次发布。抓取或改写的有效进度会刷新运行心跳，只有连续超过 30 分钟没有进度的排队、抓取或改写任务才可被计划任务安全接管；过期 `publishing` 只会收敛为待确认状态，绝不重发。
 
 ## 内容
 

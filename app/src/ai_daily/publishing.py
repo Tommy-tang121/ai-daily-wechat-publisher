@@ -31,7 +31,7 @@ class WeChatPublisher:
             raise RuntimeError("微信发布环境不完整：缺少 Bun 或发布脚本")
         title = article.get("title") or self.title
         cover = article.get("cover_path") or self.cover or str(
-            generate_cover(Path(__file__).parents[2] / "static" / "covers", article["date"], title)
+            generate_cover(Path(__file__).parents[2] / "static" / "runtime-covers", article["date"], title)
         )
         with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as file:
             file.write(article["markdown"])
