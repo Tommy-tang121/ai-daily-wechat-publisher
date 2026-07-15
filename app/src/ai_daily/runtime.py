@@ -99,6 +99,9 @@ class OpenAiCompatibleLlm:
             "messages": messages,
             "max_tokens": 8000,
         }
+        if base == "https://api.deepseek.com":
+            payload["thinking"] = {"type": "disabled"}
+            payload["response_format"] = {"type": "json_object"}
         last_error = None
         for attempt in range(3):
             try:

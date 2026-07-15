@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
@@ -54,6 +54,29 @@ class RuntimeTests(unittest.TestCase):
         with patch.dict(os.environ, {"LLM_API_KEY": "test"}), patch("requests.post", side_effect=requests.ConnectionError("closed")), patch("time.sleep"):
             with self.assertRaisesRegex(RuntimeError, "LLM"):
                 OpenAiCompatibleLlm()([])
+
+    def test_deepseek_request_disables_thinking_and_requests_json(self):
+        response = MagicMock()
+        response.json.return_value = {"choices": [{"message": {"content": "{}"}}]}
+        messages = [{"role": "user", "content": "请返回 JSON"}]
+
+        with patch.dict(
+            os.environ,
+            {
+                "LLM_API_KEY": "test-key",
+                "LLM_BASE_URL": "https://api.deepseek.com",
+                "LLM_MODEL": "deepseek-v4-flash",
+            },
+            clear=True,
+        ), patch("requests.post", return_value=response) as request:
+            OpenAiCompatibleLlm()(messages)
+
+        payload = request.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "deepseek-v4-flash")
+        self.assertEqual(payload["messages"], messages)
+        self.assertEqual(payload["max_tokens"], 8000)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
 
     def test_runtime_runner_has_a_cover_factory_for_ready_runs(self):
         with tempfile.TemporaryDirectory() as directory:
