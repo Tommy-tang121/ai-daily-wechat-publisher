@@ -9,6 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from ai_daily import cli
+from ai_daily.content import ContentRetryExhaustedError
 from ai_daily.cli import serve_preview
 from ai_daily.daily_run import DailyRun
 from ai_daily.scheduler import WindowsTasks
@@ -127,6 +128,24 @@ class CliTests(unittest.TestCase):
             patch.object(sys, "argv", ["ai-daily", "daily"]),
         ):
             cli.main()
+
+    def test_scheduled_daily_shows_one_windows_message_after_two_invalid_ai_responses(self):
+        class Runner:
+            def settings(self):
+                return {"title": "stale title", "max_words": 150}
+
+            def prepare(self, date_value, settings, retry=False):
+                raise ContentRetryExhaustedError("LLM 返回格式无效（已自动重试一次）")
+
+        with (
+            patch.object(cli, "build_runner", return_value=Runner()),
+            patch.object(cli, "show_scheduled_retry_failure") as notify,
+            patch.object(sys, "argv", ["ai_daily", "daily"]),
+            self.assertRaises(ContentRetryExhaustedError),
+        ):
+            cli.main()
+
+        notify.assert_called_once()
 
     def test_scheduled_daily_finishes_pending_finalization_cleanup(self):
         class Runner:

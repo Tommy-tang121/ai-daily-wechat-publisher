@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 
+from .content import ContentRetryExhaustedError
 from .runtime import build_runner
 from .scheduler import WindowsTasks
 from .web import create_app
@@ -12,6 +13,17 @@ def serve_preview(app, flask_runner, waitress_runner=None):
         flask_runner(app)
     else:
         waitress_runner(app)
+
+
+def show_scheduled_retry_failure():
+    import ctypes
+
+    ctypes.windll.user32.MessageBoxW(
+        0,
+        "❌ AI 改写连续两次返回无效格式\n\n已停止发布，未创建微信草稿。",
+        "AI Daily · 定时任务失败",
+        0x10 | 0x1000,
+    )
 
 
 def main():
@@ -37,11 +49,16 @@ def main():
         run_date = date.today().isoformat()
         settings = runner.settings()
         settings["title"] = f"AI 行业热点新闻 | {run_date}"
-        run = runner.prepare(run_date, settings, retry=True)
-        if not getattr(run, "owner", False) and getattr(run, "state", "") in {"queued", "scraping", "rewriting", "publishing"}:
-            raise RuntimeError("daily run is already active; task scheduler will retry")
-        if not args.preview and run.state in {"ready", "finalizing"}:
-            runner.publish(run.date)
+        try:
+            run = runner.prepare(run_date, settings, retry=True)
+            if not getattr(run, "owner", False) and getattr(run, "state", "") in {"queued", "scraping", "rewriting", "publishing"}:
+                raise RuntimeError("daily run is already active; task scheduler will retry")
+            if not args.preview and run.state in {"ready", "finalizing"}:
+                runner.publish(run.date)
+        except ContentRetryExhaustedError:
+            if not args.preview:
+                show_scheduled_retry_failure()
+            raise
         return
     web = create_app(runner, tasks=WindowsTasks(app_dir / "scripts" / "run_scheduled.bat"))
     try:

@@ -8,6 +8,10 @@ class ContentError(RuntimeError):
     pass
 
 
+class ContentRetryExhaustedError(ContentError):
+    pass
+
+
 class Content:
     """Builds one complete, attributable daily article from injected adapters."""
 
@@ -31,6 +35,15 @@ class Content:
         return article
 
     def _rewrite_daily(self, date: str, items: list[dict], settings: dict) -> dict:
+        last_error = None
+        for _ in range(2):
+            try:
+                return self._rewrite_once(date, items, settings)
+            except ContentError as exc:
+                last_error = exc
+        raise ContentRetryExhaustedError(f"{last_error}（已自动重试一次）") from last_error
+
+    def _rewrite_once(self, date: str, items: list[dict], settings: dict) -> dict:
         prompt_path = Path(__file__).parents[2] / "prompts" / "rewrite.md"
         prompt = prompt_path.read_text(encoding="utf-8")
         prompt = prompt.replace("{{MAX_CHARS}}", str(settings.get("max_words", 150)))

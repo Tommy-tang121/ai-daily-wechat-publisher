@@ -109,6 +109,47 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(ContentError, "条目不完整"):
             Content(source, llm).build("2026-07-10", {})
 
+    def test_content_retries_one_invalid_full_daily_response_before_failing(self):
+        source = lambda date: [
+            {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "news"}
+            for index in range(25)
+        ]
+        calls = []
+        responses = [
+            "not json",
+            json.dumps({
+                "todayObservation": "today observation",
+                "items": [{"title": str(index), "rewritten": "rewritten"} for index in range(25)],
+                "editorComment": "editor comment",
+            }),
+        ]
+
+        def llm(messages):
+            calls.append(messages)
+            return responses.pop(0)
+
+        article = Content(source, llm).build("2026-07-10", {})
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][1]["content"], calls[1][1]["content"])
+        self.assertEqual(len(article["items"]), 25)
+
+    def test_content_stops_after_two_invalid_full_daily_responses(self):
+        source = lambda date: [
+            {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "news"}
+            for index in range(25)
+        ]
+        calls = []
+
+        def llm(messages):
+            calls.append(messages)
+            return "not json"
+
+        with self.assertRaisesRegex(ContentError, "已自动重试一次"):
+            Content(source, llm).build("2026-07-10", {})
+
+        self.assertEqual(len(calls), 2)
+
     def test_content_adds_editorial_sections_from_the_same_daily_response(self):
         source = lambda date: [
             {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "行业动态"}
