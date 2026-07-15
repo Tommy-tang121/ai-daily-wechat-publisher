@@ -48,10 +48,6 @@ def task_xml(schedule_time: str, script: Path) -> str:
         ("ExecutionTimeLimit", "PT0S"),
     ):
         ET.SubElement(settings, tag(name)).text = value
-    restart = ET.SubElement(settings, tag("RestartOnFailure"))
-    ET.SubElement(restart, tag("Interval")).text = "PT15M"
-    ET.SubElement(restart, tag("Count")).text = "3"
-
     actions = ET.SubElement(root, tag("Actions"), {"Context": "Author"})
     action = ET.SubElement(actions, tag("Exec"))
     ET.SubElement(action, tag("Command")).text = "cmd.exe"

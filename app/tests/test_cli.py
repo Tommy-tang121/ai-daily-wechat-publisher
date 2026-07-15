@@ -1,4 +1,5 @@
 import sys
+import os
 import tempfile
 import unittest
 from contextlib import closing
@@ -17,6 +18,12 @@ from ai_daily.storage import Store
 
 
 class CliTests(unittest.TestCase):
+    def test_scheduled_failure_reason_masks_configured_secrets(self):
+        with patch.dict(os.environ, {"LLM_API_KEY": "private-key"}):
+            reason = cli.safe_failure_reason(RuntimeError("LLM failed with private-key"))
+
+        self.assertEqual(reason, "LLM failed with ***")
+
     def test_preview_uses_flask_fallback_when_waitress_is_unavailable(self):
         seen = []
         serve_preview(object(), lambda app: seen.append(app))
@@ -113,6 +120,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(captured["settings"].get("title"), f"AI 行业热点新闻 | {date.today().isoformat()}")
 
     def test_scheduled_daily_does_not_publish_an_uncertain_publication(self):
+        notifications = []
+
         class Runner:
             def settings(self):
                 return {"title": "stale title", "max_words": 150}
@@ -125,11 +134,85 @@ class CliTests(unittest.TestCase):
 
         with (
             patch.object(cli, "build_runner", return_value=Runner()),
+            patch.object(cli, "show_scheduled_failure", side_effect=notifications.append, create=True),
             patch.object(sys, "argv", ["ai-daily", "daily"]),
         ):
-            cli.main()
+            error = None
+            try:
+                cli.main()
+            except Exception as exc:
+                error = exc
+
+        self.assertEqual(type(error).__name__, "ScheduledDailyFailedError")
+        self.assertEqual(notifications, ["微信发布结果待确认，请检查草稿箱"])
+
+    def test_scheduled_daily_retries_a_connection_failure_once_then_publishes(self):
+        class Runner:
+            def __init__(self):
+                self.prepare_calls = 0
+                self.publish_calls = 0
+
+            def settings(self):
+                return {"title": "stale title", "max_words": 150}
+
+            def prepare(self, date_value, settings, retry=False):
+                self.prepare_calls += 1
+                if self.prepare_calls == 1:
+                    raise RuntimeError("LLM connection failed")
+                return type("Run", (), {"date": date_value, "state": "ready", "owner": True})()
+
+            def publish(self, date_value):
+                self.publish_calls += 1
+                return type("Run", (), {"date": date_value, "state": "published"})()
+
+        runner = Runner()
+        with (
+            patch.object(cli, "build_runner", return_value=runner),
+            patch.object(sys, "argv", ["ai-daily", "daily"]),
+        ):
+            error = None
+            try:
+                cli.main()
+            except Exception as exc:
+                error = exc
+
+        self.assertIsNone(error)
+        self.assertEqual(runner.prepare_calls, 2)
+        self.assertEqual(runner.publish_calls, 1)
+
+    def test_scheduled_daily_notifies_after_two_connection_failures(self):
+        notifications = []
+
+        class Runner:
+            def __init__(self):
+                self.prepare_calls = 0
+
+            def settings(self):
+                return {"title": "stale title", "max_words": 150}
+
+            def prepare(self, date_value, settings, retry=False):
+                self.prepare_calls += 1
+                raise RuntimeError("LLM connection failed")
+
+        runner = Runner()
+        with (
+            patch.object(cli, "build_runner", return_value=runner),
+            patch.object(cli, "show_scheduled_failure", side_effect=notifications.append),
+            patch.object(sys, "argv", ["ai-daily", "daily"]),
+        ):
+            error = None
+            try:
+                cli.main()
+            except Exception as exc:
+                error = exc
+
+        self.assertEqual(type(error).__name__, "ScheduledDailyFailedError")
+        self.assertEqual(runner.prepare_calls, 2)
+        self.assertEqual(notifications, ["LLM connection failed"])
 
     def test_scheduled_daily_shows_one_windows_message_after_two_invalid_ai_responses(self):
+        notifications = []
+
         class Runner:
             def settings(self):
                 return {"title": "stale title", "max_words": 150}
@@ -139,13 +222,19 @@ class CliTests(unittest.TestCase):
 
         with (
             patch.object(cli, "build_runner", return_value=Runner()),
-            patch.object(cli, "show_scheduled_retry_failure") as notify,
+            patch.object(cli, "show_scheduled_retry_failure", create=True),
+            patch.object(cli, "show_scheduled_failure", side_effect=notifications.append, create=True),
             patch.object(sys, "argv", ["ai_daily", "daily"]),
-            self.assertRaises(ContentRetryExhaustedError),
         ):
-            cli.main()
+            error = None
+            try:
+                cli.main()
+            except Exception as exc:
+                error = exc
 
-        notify.assert_called_once()
+        self.assertEqual(type(error).__name__, "ScheduledDailyFailedError")
+        self.assertEqual(len(notifications), 1)
+        self.assertIn("LLM 返回格式无效", notifications[0])
 
     def test_scheduled_daily_finishes_pending_finalization_cleanup(self):
         class Runner:
@@ -160,6 +249,7 @@ class CliTests(unittest.TestCase):
 
             def publish(self, date_value):
                 self.publish_calls.append(date_value)
+                return type("Run", (), {"date": date_value, "state": "published"})()
 
         runner = Runner()
         with (
@@ -219,7 +309,9 @@ class CliTests(unittest.TestCase):
 
             with (
                 patch.object(cli, "build_runner", return_value=runner),
+                patch.object(cli, "show_scheduled_failure"),
                 patch.object(sys, "argv", ["ai-daily", "daily"]),
+                self.assertRaisesRegex(RuntimeError, "发布结果待确认"),
             ):
                 cli.main()
 

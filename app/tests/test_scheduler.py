@@ -41,12 +41,11 @@ class SchedulerTests(unittest.TestCase):
         arguments = task_arguments(Path(r"E:\App Development\AI Daily\app\scripts\run_scheduled.bat"))
         self.assertEqual(arguments, '"E:\\App Development\\AI Daily\\app\\scripts\\run_scheduled.bat"')
 
-    def test_task_xml_retries_failures_and_runs_the_quoted_daily_script(self):
+    def test_task_xml_does_not_add_independent_retries_and_runs_the_quoted_daily_script(self):
         document = ET.fromstring(task_xml("09:30", Path(r"E:\App Development\AI Daily\app\scripts\run_scheduled.bat")))
         namespace = {"task": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 
-        self.assertEqual(document.findtext(".//task:RestartOnFailure/task:Interval", namespaces=namespace), "PT15M")
-        self.assertEqual(document.findtext(".//task:RestartOnFailure/task:Count", namespaces=namespace), "3")
+        self.assertIsNone(document.find(".//task:RestartOnFailure", namespaces=namespace))
         self.assertEqual(document.findtext(".//task:Principal/task:UserId", namespaces=namespace), os.environ.get("USERNAME", ""))
         self.assertEqual(document.findtext(".//task:Principal/task:LogonType", namespaces=namespace), "InteractiveToken")
         self.assertIn('"E:\\App Development\\AI Daily\\app\\scripts\\run_scheduled.bat"', document.findtext(".//task:Actions/task:Exec/task:Arguments", namespaces=namespace))

@@ -1,7 +1,9 @@
 import argparse
+import os
 from pathlib import Path
 
 from .content import ContentRetryExhaustedError
+from .daily_run import PublicationUncertainError
 from .runtime import build_runner
 from .scheduler import WindowsTasks
 from .web import create_app
@@ -15,15 +17,60 @@ def serve_preview(app, flask_runner, waitress_runner=None):
         waitress_runner(app)
 
 
-def show_scheduled_retry_failure():
+class ScheduledDailyFailedError(RuntimeError):
+    pass
+
+
+class DailyRunActiveError(RuntimeError):
+    pass
+
+
+def safe_failure_reason(error: Exception) -> str:
+    message = " ".join(str(error).split()) or type(error).__name__
+    for name in ("LLM_API_KEY", "WECHAT_APP_ID", "WECHAT_APP_SECRET"):
+        value = os.environ.get(name)
+        if value:
+            message = message.replace(value, "***")
+    return message[:300]
+
+
+def show_scheduled_failure(reason: str):
     import ctypes
 
     ctypes.windll.user32.MessageBoxW(
         0,
-        "❌ AI 改写连续两次返回无效格式\n\n已停止发布，未创建微信草稿。",
+        f"❌ 日报两次处理均未成功\n\n未确认微信草稿已创建。\n原因：{reason}",
         "AI Daily · 定时任务失败",
         0x10 | 0x1000,
     )
+
+
+def run_scheduled_daily(runner, run_date: str, settings: dict, preview: bool):
+    last_error = None
+    for _ in range(2):
+        try:
+            run = runner.prepare(run_date, settings, retry=True)
+            state = getattr(run, "state", "")
+            if not getattr(run, "owner", False) and state in {"queued", "scraping", "rewriting", "publishing"}:
+                raise DailyRunActiveError("daily run is already active")
+            if preview:
+                return run
+            if state in {"ready", "finalizing"}:
+                run = runner.publish(run.date)
+                state = getattr(run, "state", "")
+            if state in {"published", "finalizing"}:
+                return run
+            if state == "publication_uncertain":
+                raise PublicationUncertainError("微信发布结果待确认，请检查草稿箱")
+            raise RuntimeError(f"daily run did not publish: {state or 'unknown'}")
+        except (ContentRetryExhaustedError, PublicationUncertainError) as exc:
+            last_error = exc
+            break
+        except DailyRunActiveError:
+            raise
+        except Exception as exc:
+            last_error = exc
+    raise ScheduledDailyFailedError(safe_failure_reason(last_error))
 
 
 def main():
@@ -50,14 +97,10 @@ def main():
         settings = runner.settings()
         settings["title"] = f"AI 行业热点新闻 | {run_date}"
         try:
-            run = runner.prepare(run_date, settings, retry=True)
-            if not getattr(run, "owner", False) and getattr(run, "state", "") in {"queued", "scraping", "rewriting", "publishing"}:
-                raise RuntimeError("daily run is already active; task scheduler will retry")
-            if not args.preview and run.state in {"ready", "finalizing"}:
-                runner.publish(run.date)
-        except ContentRetryExhaustedError:
+            run_scheduled_daily(runner, run_date, settings, args.preview)
+        except ScheduledDailyFailedError as exc:
             if not args.preview:
-                show_scheduled_retry_failure()
+                show_scheduled_failure(str(exc))
             raise
         return
     web = create_app(runner, tasks=WindowsTasks(app_dir / "scripts" / "run_scheduled.bat"))
