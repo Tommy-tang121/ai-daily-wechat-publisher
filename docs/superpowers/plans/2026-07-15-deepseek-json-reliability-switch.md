@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `app/tests/test_runtime.py`
 
-- [ ] **Step 1: 编写会失败的测试**
+- [x] **Step 1: 编写会失败的测试**
 
 在 `OpenAiCompatibleLlm` 的测试中模拟一次 DeepSeek 调用，断言请求 JSON 包含：
 
@@ -26,17 +26,17 @@
 
 同时断言仍保留既有的 `model`、`messages` 和 `max_tokens` 字段。
 
-- [ ] **Step 2: 运行测试，确认当前实现失败**
+- [x] **Step 2: 运行测试，确认当前实现失败**
 
 Run: `app\.venv\Scripts\python.exe -m unittest app/tests/test_runtime.py -q`
 
 Expected: 新增断言失败，因为当前请求尚未携带 DeepSeek 的两个字段。
 
-- [ ] **Step 3: 实现最小改动**
+- [x] **Step 3: 实现最小改动**
 
 在 `app/src/ai_daily/runtime.py` 组装请求体的位置，仅当 `LLM_BASE_URL` 指向 `https://api.deepseek.com` 时加入上述两个字段。不要改变 Agnes 或其他 OpenAI 兼容服务的请求体。
 
-- [ ] **Step 4: 再次运行测试，确认通过**
+- [x] **Step 4: 再次运行测试，确认通过**
 
 Run: `app\.venv\Scripts\python.exe -m unittest app/tests/test_runtime.py -q`
 
@@ -47,7 +47,7 @@ Expected: PASS。
 **Files:**
 - Modify locally only: `.env` (Git ignored; 不提交)
 
-- [ ] **Step 1: 更新本机 `.env`**
+- [x] **Step 1: 更新本机 `.env`**
 
 设置以下运行参数：
 
@@ -59,13 +59,13 @@ LLM_API_KEY=<用户提供的 DeepSeek 密钥>
 
 密钥不能出现在源码、测试、文档、命令输出或 Git 暂存区。
 
-- [ ] **Step 2: 验证忽略规则**
+- [x] **Step 2: 验证忽略规则**
 
 Run: `git check-ignore -q .env`
 
 Expected: 返回成功，证明 `.env` 不会被 Git 跟踪。
 
-- [ ] **Step 3: 验证配置已被加载但不打印密钥**
+- [x] **Step 3: 验证配置已被加载但不打印密钥**
 
 用 Python 仅输出 `LLM_BASE_URL`、`LLM_MODEL` 和“密钥是否存在”的布尔值。
 
@@ -78,19 +78,19 @@ Expected: 地址为 `https://api.deepseek.com`、模型为 `deepseek-v4-flash`�
 - Verify: `app/src/ai_daily/content.py`
 - Verify: `app/src/ai_daily/runtime.py`
 
-- [ ] **Step 1: 运行完整测试集**
+- [x] **Step 1: 运行完整测试集**
 
 Run: `app\.venv\Scripts\python.exe -m unittest discover -s app\tests -q`
 
 Expected: 全部通过。
 
-- [ ] **Step 2: 运行静态编译检查**
+- [x] **Step 2: 运行静态编译检查**
 
 Run: `app\.venv\Scripts\python.exe -m compileall -q app\src`
 
 Expected: 无错误。
 
-- [ ] **Step 3: 检查改动范围和密钥泄漏**
+- [x] **Step 3: 检查改动范围和密钥泄漏**
 
 Run: `git diff --check`，再检查待提交文件中不存在 `.env` 或 `LLM_API_KEY` 的实际值。
 
@@ -101,19 +101,19 @@ Expected: 只有运行时适配器和对应测试会进入提交；没有密钥�
 **Files:**
 - Verify: Windows task `\AI Daily Publisher`
 
-- [ ] **Step 1: 做一次不发布的完整日报预检**
+- [x] **Step 1: 做一次不发布的完整日报预检**
 
 运行现有生成链路到严格校验完成为止，不调用微信草稿发布。仅记录抓取条数、返回条数、缺失编号（若有）、耗时和错误类型；不记录正文或密钥。
 
 Expected: 成功时得到完整日报；失败时明确停在校验前，不产生半成品草稿。
 
-- [ ] **Step 2: 确认 Windows 定时任务仍保留既有重试与失败提示逻辑**
+- [x] **Step 2: 确认 Windows 定时任务仍保留既有重试与失败提示逻辑**
 
 检查任务脚本和任务状态，不新建额外轮询或重复任务。
 
 Expected: 仍是“首次 + 自动重试一次”；两次失败后弹出失败原因，成功才推送草稿箱。
 
-- [ ] **Step 3: 提交可公开的代码改动**
+- [x] **Step 3: 提交可公开的代码改动**
 
 Run: `git add app/src/ai_daily/runtime.py app/tests/test_runtime.py && git commit -m "fix: use DeepSeek JSON mode for daily rewrite"`
 
