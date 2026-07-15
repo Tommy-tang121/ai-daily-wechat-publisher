@@ -21,7 +21,7 @@
 <body>
   <main>
     <h1><span style="color:#E63946">AI</span> Daily · UI / UX 同步参考</h1>
-    <p>同步日期：2026-07-13。此页以 <code>app/templates/index.html</code>、<code>app/static/style.css</code>、<code>app/static/app.js</code> 的实际实现为准，可直接离线打开。视觉主题是“暖色草稿本上的手写 AI 日报”。</p>
+    <p>同步日期：2026-07-16。此页以 <code>app/templates/index.html</code>、<code>app/static/style.css</code>、<code>app/static/app.js</code> 的实际实现为准，可直接离线打开。视觉主题是“暖色草稿本上的手写 AI 日报”。</p>
 
     <h2>1. 视觉基础</h2>
     <table>
@@ -104,7 +104,7 @@
     <p>模型和抓取内容均通过 DOM 的 <code>textContent</code> 插入，不当作 HTML 执行；来源链接单独设为 <code>target=&quot;_blank&quot;</code> 和 <code>rel=&quot;noreferrer&quot;</code>。</p>
 
     <h2>7. 当前已知文案偏差</h2>
-    <div class="notice">后端已在 2026-07-13 改为“一次模型调用处理当天全部资讯”，但处理中状态详情仍有旧文案“全量内容按批并行改写，通常约 1–2 分钟”。这是 <code>app/static/app.js</code> 的显示文案遗留，不影响实际生成流程；本次“同步一下”只同步文档，未改动业务或前端代码。</div>
+    <div class="notice">后端当前使用“一次模型调用处理当天全部资讯”；配置 DeepSeek 时会关闭思考模式并要求 JSON 返回。处理中状态详情仍有旧文案“全量内容按批并行改写，通常约 1–2 分钟”，这是 <code>app/static/app.js</code> 的显示文案遗留，不影响实际生成流程；本次同步只更新文档，不改动业务或前端代码。</div>
   </main>
 </body>
 </html>
