@@ -21,7 +21,7 @@ class WorkflowTests(unittest.TestCase):
 
     @staticmethod
     def valid_llm(messages):
-        count = messages[1]["content"].count("### 条目 ")
+        count = messages[0]["content"].count("### 条目 ")
         return json.dumps({
             "todayObservation": "今日观察",
             "items": [
@@ -89,6 +89,41 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(article["opening"], "覆盖全天的观察")
         self.assertEqual(article["closing"], "覆盖全天的短评")
         self.assertEqual(article["items"][24]["source_url"], "https://origin/24")
+
+    def test_content_uses_original_message_shape_without_sending_source_urls_to_llm(self):
+        source = lambda date: [
+            {
+                "title": "Source title",
+                "summary": "Source summary",
+                "source_url": "https://origin/private-link",
+                "source": "A",
+                "category": "news",
+            }
+        ]
+        captured = []
+
+        def llm(messages):
+            captured.extend(messages)
+            return json.dumps({
+                "todayObservation": "today observation",
+                "items": [{"title": "Edited title", "rewritten": "rewritten body"}],
+                "editorComment": "editor comment",
+            })
+
+        article = Content(source, llm).build("2026-07-15", {})
+
+        self.assertIn("### 条目 1", captured[0]["content"])
+        self.assertEqual(captured[1]["content"], "请根据以上要求处理今日的 1 条 AI 新闻。")
+        self.assertNotIn("https://origin/private-link", captured[0]["content"])
+        self.assertEqual(article["items"][0]["source_url"], "https://origin/private-link")
+
+    def test_rewrite_prompt_does_not_require_llm_link_or_source_fields(self):
+        prompt_path = Path(__file__).parents[1] / "prompts" / "rewrite.md"
+        prompt = prompt_path.read_text(encoding="utf-8")
+
+        self.assertNotIn('"link":', prompt)
+        self.assertNotIn('"source":', prompt)
+        self.assertNotIn('`title` / `rewritten` / `link` / `source`', prompt)
 
     def test_content_rejects_a_partial_single_response(self):
         source = lambda date: [
@@ -159,7 +194,7 @@ class WorkflowTests(unittest.TestCase):
 
         def llm(messages):
             calls.append(messages)
-            self.assertEqual(messages[1]["content"].count("### 条目 "), 11)
+            self.assertEqual(messages[0]["content"].count("### 条目 "), 11)
             return json.dumps({
                 "todayObservation": "覆盖全天的观察",
                 "items": [{"title": "R", "rewritten": "正文"} for _ in range(11)],
@@ -229,7 +264,7 @@ class WorkflowTests(unittest.TestCase):
             ]
 
         def llm(messages):
-            count = messages[1]["content"].count("### 条目 ")
+            count = messages[0]["content"].count("### 条目 ")
             return json.dumps({
                 "todayObservation": "Opening",
                 "items": [
