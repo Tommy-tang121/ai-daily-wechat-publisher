@@ -140,6 +140,19 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(Path(cover["cover_path"]).parent, app_dir / "static" / "runtime-covers")
             self.assertEqual(cover["cover_url"], "/static/runtime-covers/2026-07-10.png")
 
+    def test_runtime_cover_factory_uses_final_article_title(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_dir = Path(directory) / "app"
+            app_dir.mkdir()
+            generated = app_dir / "static" / "runtime-covers" / "2026-07-16.png"
+            with patch("ai_daily.runtime.generate_cover", return_value=generated) as generate:
+                build_runner(app_dir, preview_only=True).cover(
+                    {"date": "2026-07-16", "title": "AI 行业热点新闻 | 2026-07-16"},
+                    {"title": "AI 行业热点新闻 | 2026-07-13"},
+                )
+
+        self.assertEqual(generate.call_args.args[2], "AI 行业热点新闻 | 2026-07-16")
+
     def test_formal_runner_uses_the_wechat_publisher_directly(self):
         with tempfile.TemporaryDirectory() as directory:
             app_dir = Path(directory) / "app"

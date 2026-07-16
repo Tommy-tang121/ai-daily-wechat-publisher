@@ -133,10 +133,11 @@ def build_runner(app_dir: Path, preview_only: bool = False) -> DailyRun:
         publisher = WeChatPublisher(settings["title"], author=settings["author"])
 
     def cover(article: dict, values: dict) -> dict:
+        title = article.get("title") or values.get("title", settings["title"])
         path = generate_cover(
             app_dir / "static" / "runtime-covers",
             article["date"],
-            values.get("title", settings["title"]),
+            title,
             values.get("author", settings["author"]),
         )
         return {"cover_path": str(path), "cover_url": f"/static/runtime-covers/{path.name}"}

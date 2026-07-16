@@ -1,11 +1,21 @@
 from dataclasses import replace
 import logging
+import re
 import uuid
 
 from .storage import InvalidTransition, RECLAIMABLE_STATES
 
 
 logger = logging.getLogger("ai_daily")
+TITLE_DATE_SUFFIX = re.compile(r"\s*\|\s*\d{4}-\d{2}-\d{2}\s*$")
+
+
+def base_title(title: str) -> str:
+    return TITLE_DATE_SUFFIX.sub("", title).strip()
+
+
+def daily_title(title: str, date: str) -> str:
+    return f"{base_title(title) or 'AI 行业热点新闻'} | {date}"
 
 
 class PublicationUncertainError(RuntimeError):
@@ -37,9 +47,17 @@ class DailyRun:
         return self.store.events(run_id)
 
     def settings(self) -> dict:
-        return self.store.settings(self.default_settings)
+        values = self.store.settings(self.default_settings)
+        title = base_title(values.get("title", ""))
+        if title != values.get("title", ""):
+            self.store.update_settings({"title": title})
+            values["title"] = title
+        return values
 
     def update_settings(self, values: dict) -> dict:
+        values = {**values}
+        if "title" in values:
+            values["title"] = base_title(values["title"])
         self.store.update_settings(values)
         return self.settings()
 
@@ -189,7 +207,7 @@ class DailyRun:
 
         try:
             article = self.content.build(date, settings, progress=progress)
-            article["title"] = settings.get("title", f"AI 行业热点新闻 | {date}")
+            article["title"] = daily_title(settings.get("title", ""), date)
             self.store.record_event(run_id, "formatting", "complete", "文章排版完成")
             if self.cover:
                 self.store.record_event(run_id, "cover", "progress", "正在生成封面")

@@ -952,6 +952,17 @@ class WorkflowTests(unittest.TestCase):
 
         self.assertEqual(ready.article.get("title"), "AI 行业热点新闻 | 2026-07-10")
 
+    def test_daily_title_strips_stale_setting_date_and_uses_run_date(self):
+        store = Store(Path(self.tmp.name) / "daily.db")
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+        runner = DailyRun(store, Content(source, self.valid_llm), None, settings={"title": "AI 行业热点新闻"})
+        runner.update_settings({"title": "AI 行业热点新闻 | 2026-07-13"})
+
+        ready = runner.prepare("2026-07-16", runner.settings())
+
+        self.assertEqual(runner.settings()["title"], "AI 行业热点新闻")
+        self.assertEqual(ready.article["title"], "AI 行业热点新闻 | 2026-07-16")
+
     def test_runner_exposes_persisted_settings_to_web_and_scheduled_callers(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         runner = DailyRun(store, None, None, settings={"max_words": 150})
