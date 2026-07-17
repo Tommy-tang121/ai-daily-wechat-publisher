@@ -1,5 +1,6 @@
 from dataclasses import replace
 import logging
+import os
 import re
 import uuid
 
@@ -8,6 +9,7 @@ from .storage import InvalidTransition, RECLAIMABLE_STATES
 
 logger = logging.getLogger("ai_daily")
 TITLE_DATE_SUFFIX = re.compile(r"\s*\|\s*\d{4}-\d{2}-\d{2}\s*$")
+WECHAT_INVALID_IP = re.compile(r"\b40164\b.*?\binvalid\s+ip\s+([0-9a-f:.]+)", re.IGNORECASE)
 
 
 def base_title(title: str) -> str:
@@ -16,6 +18,23 @@ def base_title(title: str) -> str:
 
 def daily_title(title: str, date: str) -> str:
     return f"{base_title(title) or 'AI 行业热点新闻'} | {date}"
+
+
+def safe_failure_reason(error: Exception) -> str:
+    """Return a short user-facing failure reason without exposing configured secrets."""
+    message = " ".join(str(error).split()) or type(error).__name__
+    for name in ("LLM_API_KEY", "WECHAT_APP_ID", "WECHAT_APP_SECRET"):
+        value = os.environ.get(name)
+        if value:
+            message = message.replace(value, "***")
+
+    invalid_ip = WECHAT_INVALID_IP.search(message)
+    if invalid_ip:
+        return (
+            f"微信 IP 白名单未包含当前出口 IP：{invalid_ip.group(1)}。"
+            "请在微信公众平台的 IP 白名单加入此 IP 后重新生成。"
+        )
+    return message[:300]
 
 
 class PublicationUncertainError(RuntimeError):
@@ -250,7 +269,7 @@ class DailyRun:
             logger.warning("run=%s stage=publication_uncertain error=%s", run.id, type(exc).__name__)
             return self._mark_publication_uncertain(
                 publishing,
-                "发布结果待确认：请先在微信草稿箱核对后再重新生成",
+                safe_failure_reason(exc),
             )
         try:
             published = self.store.mark_finalizing(run.id, media_id)
@@ -258,7 +277,7 @@ class DailyRun:
             logger.error("run=%s stage=receipt_persist_failed error=%s", run.id, type(exc).__name__)
             return self._mark_publication_uncertain(
                 publishing,
-                "发布结果待确认：请先在微信草稿箱核对后再重新生成",
+                safe_failure_reason(exc),
             )
         published = self._finish_finalization(published)
         logger.info("run=%s stage=published", run.id)

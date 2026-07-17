@@ -1,9 +1,8 @@
 import argparse
-import os
 from pathlib import Path
 
 from .content import ContentRetryExhaustedError
-from .daily_run import PublicationUncertainError
+from .daily_run import PublicationUncertainError, safe_failure_reason
 from .runtime import build_runner
 from .scheduler import WindowsTasks
 from .web import create_app
@@ -23,15 +22,6 @@ class ScheduledDailyFailedError(RuntimeError):
 
 class DailyRunActiveError(RuntimeError):
     pass
-
-
-def safe_failure_reason(error: Exception) -> str:
-    message = " ".join(str(error).split()) or type(error).__name__
-    for name in ("LLM_API_KEY", "WECHAT_APP_ID", "WECHAT_APP_SECRET"):
-        value = os.environ.get(name)
-        if value:
-            message = message.replace(value, "***")
-    return message[:300]
 
 
 def show_scheduled_failure(reason: str):
@@ -61,7 +51,8 @@ def run_scheduled_daily(runner, run_date: str, settings: dict, preview: bool):
             if state in {"published", "finalizing"}:
                 return run
             if state == "publication_uncertain":
-                raise PublicationUncertainError("微信发布结果待确认，请检查草稿箱")
+                reason = getattr(run, "error", "") or "微信发布结果待确认，请检查草稿箱"
+                raise PublicationUncertainError(reason)
             raise RuntimeError(f"daily run did not publish: {state or 'unknown'}")
         except (ContentRetryExhaustedError, PublicationUncertainError) as exc:
             last_error = exc

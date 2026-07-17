@@ -24,6 +24,30 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(reason, "LLM failed with ***")
 
+    def test_scheduled_failure_reason_names_the_current_wechat_whitelist_ip(self):
+        reason = cli.safe_failure_reason(
+            RuntimeError("Access token error 40164: invalid ip 138.199.22.133, not in whitelist")
+        )
+
+        self.assertIn("当前出口 IP：138.199.22.133", reason)
+        self.assertIn("微信公众平台", reason)
+
+    def test_scheduled_daily_keeps_the_saved_uncertain_publication_reason(self):
+        class Runner:
+            def prepare(self, date_value, settings, retry=False):
+                return type(
+                    "Run",
+                    (),
+                    {
+                        "date": date_value,
+                        "state": "publication_uncertain",
+                        "error": "微信 IP 白名单未包含当前出口 IP：138.199.22.133。",
+                    },
+                )()
+
+        with self.assertRaisesRegex(cli.ScheduledDailyFailedError, "138.199.22.133"):
+            cli.run_scheduled_daily(Runner(), "2026-07-17", {}, preview=False)
+
     def test_preview_uses_flask_fallback_when_waitress_is_unavailable(self):
         seen = []
         serve_preview(object(), lambda app: seen.append(app))

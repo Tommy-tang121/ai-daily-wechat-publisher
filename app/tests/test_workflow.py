@@ -717,6 +717,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(uncertain.media_id, "")
         self.assertEqual(runner.events(ready.id), [])
 
+    def test_publish_stores_the_current_ip_when_wechat_rejects_the_whitelist(self):
+        source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
+
+        def publisher(article):
+            raise RuntimeError("Access token error 40164: invalid ip 138.199.22.133, not in whitelist")
+
+        runner = DailyRun(Store(Path(self.tmp.name) / "daily.db"), Content(source, self.valid_llm), publisher)
+        runner.prepare("2026-07-10", {})
+
+        uncertain = runner.publish("2026-07-10")
+
+        self.assertEqual(uncertain.state, "publication_uncertain")
+        self.assertIn("当前出口 IP：138.199.22.133", uncertain.error)
+        self.assertIn("微信公众平台", uncertain.error)
+
     def test_finalization_write_failure_becomes_uncertain_without_republishing(self):
         store = Store(Path(self.tmp.name) / "daily.db")
         ready = self._ready_run(store, "2026-07-10")
