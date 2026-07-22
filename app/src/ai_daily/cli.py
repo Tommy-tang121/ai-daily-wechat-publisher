@@ -1,5 +1,8 @@
 import argparse
+import time
 from pathlib import Path
+
+import requests
 
 from .content import ContentRetryExhaustedError
 from .daily_run import PublicationUncertainError, safe_failure_reason
@@ -37,7 +40,7 @@ def show_scheduled_failure(reason: str):
 
 def run_scheduled_daily(runner, run_date: str, settings: dict, preview: bool):
     last_error = None
-    for _ in range(2):
+    for attempt in range(2):
         try:
             run = runner.prepare(run_date, settings, retry=True)
             state = getattr(run, "state", "")
@@ -61,6 +64,8 @@ def run_scheduled_daily(runner, run_date: str, settings: dict, preview: bool):
             raise
         except Exception as exc:
             last_error = exc
+            if attempt == 0 and isinstance(exc, requests.ConnectionError):
+                time.sleep(60)
     raise ScheduledDailyFailedError(safe_failure_reason(last_error))
 
 

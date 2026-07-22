@@ -7,6 +7,8 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+import requests
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from ai_daily import cli
@@ -31,6 +33,18 @@ class CliTests(unittest.TestCase):
 
         self.assertIn("当前出口 IP：138.199.22.133", reason)
         self.assertIn("微信公众平台", reason)
+
+    def test_scheduled_failure_reason_explains_a_source_dns_failure(self):
+        reason = cli.safe_failure_reason(
+            requests.ConnectionError(
+                "HTTPSConnectionPool(host='aihot.virxact.com', port=443): "
+                "NameResolutionError: Failed to resolve 'aihot.virxact.com' "
+                "([Errno 11001] getaddrinfo failed)"
+            )
+        )
+
+        self.assertIn("资讯源域名解析失败", reason)
+        self.assertIn("网络、VPN 或 DNS", reason)
 
     def test_scheduled_daily_keeps_the_saved_uncertain_publication_reason(self):
         class Runner:
@@ -203,6 +217,24 @@ class CliTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(runner.prepare_calls, 2)
         self.assertEqual(runner.publish_calls, 1)
+
+    def test_scheduled_daily_waits_before_retrying_a_source_connection_failure(self):
+        class Runner:
+            def __init__(self):
+                self.prepare_calls = 0
+
+            def prepare(self, date_value, settings, retry=False):
+                self.prepare_calls += 1
+                if self.prepare_calls == 1:
+                    raise requests.ConnectionError("temporary DNS failure")
+                return type("Run", (), {"date": date_value, "state": "published", "owner": True})()
+
+        runner = Runner()
+        with patch("time.sleep") as sleep:
+            run = cli.run_scheduled_daily(runner, "2026-07-22", {}, preview=False)
+
+        self.assertEqual(run.state, "published")
+        sleep.assert_called_once_with(60)
 
     def test_scheduled_daily_notifies_after_two_connection_failures(self):
         notifications = []

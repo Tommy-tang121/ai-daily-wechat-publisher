@@ -34,6 +34,13 @@ def safe_failure_reason(error: Exception) -> str:
             f"微信 IP 白名单未包含当前出口 IP：{invalid_ip.group(1)}。"
             "请在微信公众平台的 IP 白名单加入此 IP 后重新生成。"
         )
+    lowered = message.lower()
+    if "aihot.virxact.com" in lowered and (
+        "nameresolutionerror" in lowered
+        or "failed to resolve" in lowered
+        or "getaddrinfo failed" in lowered
+    ):
+        return "资讯源域名解析失败，请检查网络、VPN 或 DNS。"
     return message[:300]
 
 
