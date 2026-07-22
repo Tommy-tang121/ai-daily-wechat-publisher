@@ -1,10 +1,12 @@
 # Scheduled Failure Notification Implementation Plan
 
+> **Status:** Historical implementation record. The implementation is complete. On 2026-07-22, AIHot connection failures were changed from an immediate second attempt to a 60-second wait before the second and final attempt. Current behavior is defined in the matching design document and stability SPEC.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the formal daily task try at most twice, then show one safe Windows failure message when it cannot confirm a WeChat draft.
 
-**Architecture:** The CLI owns the two end-to-end attempts. A normal preparation failure is retried once immediately. A `publication_uncertain` result never re-calls WeChat because the remote draft may already exist; it becomes an immediate notification instead. The task XML removes Task Scheduler's independent retries so it cannot exceed the CLI-owned limit.
+**Architecture:** The CLI owns the two end-to-end attempts. An AIHot `requests.ConnectionError` waits 60 seconds before the second attempt; other retryable preparation failures retry immediately. A `publication_uncertain` result never re-calls WeChat because the remote draft may already exist; it becomes an immediate notification instead. The task XML removes Task Scheduler's independent retries so it cannot exceed the CLI-owned limit.
 
 **Tech Stack:** Python 3, unittest, Windows Task Scheduler XML, ctypes MessageBoxW.
 

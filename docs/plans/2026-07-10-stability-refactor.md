@@ -1,5 +1,7 @@
 # AI Daily Stability Refactor Implementation Plan
 
+> **Status:** Historical implementation plan. The current implemented architecture and operating rules are documented in `docs/SPEC/`, `docs/README.md`, and `docs/superpowers/specs/`; target paths below may differ from the final compact module layout.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the local daily publisher into a recoverable, single-run-per-day workflow while placing every project artifact under `app`, `design`, or `docs`.

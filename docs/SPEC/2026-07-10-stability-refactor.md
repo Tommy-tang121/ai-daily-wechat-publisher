@@ -1,5 +1,7 @@
 # AI Daily 稳定性重构规格
 
+> 当前文档同步日期：2026-07-22。
+
 ## 架构
 
 Flask + 原生 JavaScript 只负责页面与 API。`DailyRun` 是网页与 Windows 计划任务共用的唯一流程入口；SQLite WAL 持久保存设置和计划时间，只临时保存处理中的运行、待发布文章、封面地址和事件。微信草稿创建成功后会删除这些运行数据，不保留草稿回执或已发布归档。
@@ -35,7 +37,7 @@ queued -> scraping -> rewriting -> ready -> publishing -> finalizing -> 清除�
 
 - 任务名：`AI Daily Publisher`。
 - 页面保存时间时更新该任务，并在新任务成功后删除旧检查任务。
-- 正式任务最多执行两次完整流程：首次失败后立即重试一次；两次仍失败时弹出一次脱敏后的 Windows 提示。任务计划程序不再配置额外的失败重启。
+- 正式任务最多执行两次完整流程。第一次抛出 AIHot 资讯源的 `requests.ConnectionError`（包含 DNS 解析失败）时等待 60 秒再重试；其他允许重试的发布前异常直接进入第二次尝试。两次仍失败时弹出一次脱敏后的 Windows 提示。任务计划程序不再配置额外的失败重启。
 - 任务在当前 Windows 用户上下文运行；电脑关闭或用户退出登录时无法执行。
 - 设置和保存的计划时间不随成功发布后的运行清理而删除。
 
@@ -45,3 +47,4 @@ queued -> scraping -> rewriting -> ready -> publishing -> finalizing -> 清除�
 - 旧 `app/data/config.json` 仅迁移白名单设置。
 - 页面用 DOM 节点和 `textContent` 渲染模型内容。
 - 日志轮转保存运行编号和阶段，不记录密钥或模型原始响应。
+- AIHot 的 `NameResolutionError`、`Failed to resolve` 或 `getaddrinfo failed` 会转换成“资讯源域名解析失败，请检查网络、VPN 或 DNS”，不把完整网络异常堆栈暴露给非技术用户。

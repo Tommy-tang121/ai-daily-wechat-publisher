@@ -21,7 +21,7 @@
 <body>
   <main>
     <h1><span style="color:#E63946">AI</span> Daily · UI / UX 同步参考</h1>
-    <p>同步日期：2026-07-16。此页以 <code>app/templates/index.html</code>、<code>app/static/style.css</code>、<code>app/static/app.js</code> 的实际实现为准，可直接离线打开。视觉主题是“暖色草稿本上的手写 AI 日报”。</p>
+    <p>同步日期：2026-07-22。此页以 <code>app/templates/index.html</code>、<code>app/static/style.css</code>、<code>app/static/app.js</code> 的实际实现为准，并补充 <code>app/src/ai_daily/cli.py</code> 的 Windows 定时失败通知；可直接离线打开。视觉主题是“暖色草稿本上的手写 AI 日报”。</p>
 
     <h2>1. 视觉基础</h2>
     <table>
@@ -59,6 +59,7 @@
       <tr><td>编辑点评</td><td>正文中没有数据时不显示。</td><td>今日观察和小编短评均用浅橙背景、橙色左边线、手写栏目名。</td></tr>
       <tr><td>复制 / 发布</td><td>复制始终可点；发布在文章 ready 前禁用。</td><td>复制写入浏览器剪贴板；发布成功后清空本地预览和运行标记，避免保留日报历史。</td></tr>
       <tr><td>定时保存</td><td>时间输入框加“保存”按钮。</td><td>保存调用 Windows 计划任务接口；成功 / 失败均以右下角 Toast 提示。</td></tr>
+      <tr><td>Windows 定时失败弹窗</td><td>网页内不显示；仅正式计划任务失败时由系统弹窗呈现。</td><td>总共两次完整处理机会。第一次 AIHot 连接或 DNS 失败后等待 60 秒再重试；两次仍失败时显示脱敏原因。域名解析失败文案为“资讯源域名解析失败，请检查网络、VPN 或 DNS”。</td></tr>
     </table>
 
     <h3>运行状态徽章</h3>
@@ -69,6 +70,7 @@
       选择日期 → 保存标题、作者、字数 → <code>POST /api/runs</code> → <code>queued / scraping / rewriting</code> → 每秒轮询 <code>GET /api/runs/&lt;id&gt;</code> → <code>ready</code>（展示正文和封面） → 用户发布 → <code>publishing</code> → <code>finalizing</code> → 清除本地内容并回到空白页面。<br><br>
       失败路径：内容阶段失败 → <code>failed</code> → 可重新抓取。微信调用结果不确定 → <code>publication_uncertain</code> → 用户先核对微信草稿箱，再在确认提示中重新生成。
     </div>
+    <p class="notice">正式定时任务流转：第一次 AIHot 连接失败 → 等待 60 秒 → 第二次完整尝试；第二次仍失败 → Windows 失败弹窗。该等待不增加第三次尝试。微信调用结果不确定时不进入第二次微信发布。</p>
     <div class="timeline">
       <div class="step done">抓取：开始、完成</div>
       <div class="step done">重写：一次改写当天全部资讯并返回完整文章</div>
@@ -103,8 +105,9 @@
     </table>
     <p>模型和抓取内容均通过 DOM 的 <code>textContent</code> 插入，不当作 HTML 执行；来源链接单独设为 <code>target=&quot;_blank&quot;</code> 和 <code>rel=&quot;noreferrer&quot;</code>。</p>
 
-    <h2>7. 当前已知文案偏差</h2>
+    <h2>7. 当前已知文案偏差与外部通知边界</h2>
     <div class="notice">后端当前使用“一次模型调用处理当天全部资讯”；配置 DeepSeek 时会关闭思考模式并要求 JSON 返回。处理中状态详情仍有旧文案“全量内容按批并行改写，通常约 1–2 分钟”，这是 <code>app/static/app.js</code> 的显示文案遗留，不影响实际生成流程；本次同步只更新文档，不改动业务或前端代码。</div>
+    <p>Windows 失败弹窗不是 Web 页面 DOM 组件，不继承纸张视觉主题；它使用系统原生错误图标和置顶消息框，目的是确保无人盯着网页时仍能看到最终失败原因。</p>
   </main>
 </body>
 </html>
