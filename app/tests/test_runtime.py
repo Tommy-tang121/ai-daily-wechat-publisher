@@ -57,7 +57,10 @@ class RuntimeTests(unittest.TestCase):
 
     def test_deepseek_request_disables_thinking_and_requests_json(self):
         response = MagicMock()
-        response.json.return_value = {"choices": [{"message": {"content": "{}"}}]}
+        response.json.return_value = {
+            "choices": [{"finish_reason": "length", "message": {"content": "{}"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+        }
         messages = [{"role": "user", "content": "请返回 JSON"}]
 
         with patch.dict(
@@ -69,7 +72,7 @@ class RuntimeTests(unittest.TestCase):
             },
             clear=True,
         ), patch("requests.post", return_value=response) as request:
-            OpenAiCompatibleLlm()(messages)
+            result = OpenAiCompatibleLlm()(messages)
 
         payload = request.call_args.kwargs["json"]
         self.assertEqual(payload["model"], "deepseek-v4-flash")
@@ -77,6 +80,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(payload["max_tokens"], 8000)
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(getattr(result, "content", None), "{}")
+        self.assertEqual(getattr(result, "finish_reason", None), "length")
+        self.assertEqual(getattr(result, "prompt_tokens", None), 10)
+        self.assertEqual(getattr(result, "completion_tokens", None), 20)
 
     def test_runtime_runner_has_a_cover_factory_for_ready_runs(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
 from ai_daily.content import Content, ContentError
 from ai_daily.daily_run import DailyRun
+from ai_daily.runtime import LlmResponse
 from ai_daily.storage import InvalidTransition, Store
 
 
@@ -25,8 +26,8 @@ class WorkflowTests(unittest.TestCase):
         return json.dumps({
             "todayObservation": "今日观察",
             "items": [
-                {"title": "R", "rewritten": "rewritten"}
-                for _ in range(count)
+                {"id": index + 1, "title": "R", "rewritten": "rewritten"}
+                for index in range(count)
             ],
             "editorComment": "小编短评",
         })
@@ -34,7 +35,7 @@ class WorkflowTests(unittest.TestCase):
     def test_content_keeps_source_url_and_rejects_bad_result(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
         def good(messages):
-            return '{"todayObservation":"今日观察","items":[{"title":"R","rewritten":"rewritten","link":"https://wrong"}],"editorComment":"小编短评"}'
+            return '{"todayObservation":"今日观察","items":[{"id":1,"title":"R","rewritten":"rewritten","link":"https://wrong"}],"editorComment":"小编短评"}'
         article = Content(source, good).build("2026-07-10", {"max_words": 150})
         self.assertEqual(article["items"][0]["source_url"], "https://origin/a")
         with self.assertRaises(ContentError):
@@ -42,7 +43,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_content_accepts_legacy_rewritten_json_inside_a_code_block(self):
         source = lambda date: [{"title": "T", "summary": "S", "source_url": "https://origin/a", "source": "A", "category": "news"}]
-        raw = '```json\n{"todayObservation":"今日观察","items":[{"title":"R","rewritten":"rewritten"}],"editorComment":"小编短评"}\n```'
+        raw = '```json\n{"todayObservation":"今日观察","items":[{"id":1,"title":"R","rewritten":"rewritten"}],"editorComment":"小编短评"}\n```'
         article = Content(source, lambda messages: raw).build("2026-07-10", {})
         self.assertEqual(article["items"][0]["body"], "rewritten")
 
@@ -68,7 +69,7 @@ class WorkflowTests(unittest.TestCase):
                 return json.dumps({
                     "todayObservation": "覆盖全天的观察",
                     "items": [
-                        {"title": f"Edited {index}", "rewritten": f"Rewritten {index}"}
+                        {"id": index + 1, "title": f"Edited {index}", "rewritten": f"Rewritten {index}"}
                         for index in range(25)
                     ],
                     "editorComment": "覆盖全天的短评",
@@ -106,7 +107,7 @@ class WorkflowTests(unittest.TestCase):
             captured.extend(messages)
             return json.dumps({
                 "todayObservation": "today observation",
-                "items": [{"title": "Edited title", "rewritten": "rewritten body"}],
+                "items": [{"id": 1, "title": "Edited title", "rewritten": "rewritten body"}],
                 "editorComment": "editor comment",
             })
 
@@ -135,7 +136,7 @@ class WorkflowTests(unittest.TestCase):
             return json.dumps({
                 "todayObservation": "今日观察",
                 "items": [
-                    {"title": str(index), "rewritten": "正文"}
+                    {"id": index + 1, "title": str(index), "rewritten": "正文"}
                     for index in range(24)
                 ],
                 "editorComment": "小编短评",
@@ -154,7 +155,7 @@ class WorkflowTests(unittest.TestCase):
             "not json",
             json.dumps({
                 "todayObservation": "today observation",
-                "items": [{"title": str(index), "rewritten": "rewritten"} for index in range(25)],
+                "items": [{"id": index + 1, "title": str(index), "rewritten": "rewritten"} for index in range(25)],
                 "editorComment": "editor comment",
             }),
         ]
@@ -166,8 +167,167 @@ class WorkflowTests(unittest.TestCase):
         article = Content(source, llm).build("2026-07-10", {})
 
         self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0][1]["content"], calls[1][1]["content"])
+        self.assertEqual(calls[0][0]["content"], calls[1][0]["content"])
+        self.assertIn("JSON 无法解析", calls[1][1]["content"])
         self.assertEqual(len(article["items"]), 25)
+
+    def test_content_tells_the_second_attempt_why_the_first_response_failed(self):
+        source = lambda date: [
+            {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "news"}
+            for index in range(2)
+        ]
+        calls = []
+        responses = [
+            '{"todayObservation":"观察","items":[]}',
+            json.dumps({
+                "todayObservation": "观察",
+                "items": [
+                    {"id": index + 1, "title": str(index), "rewritten": "正文"}
+                    for index in range(2)
+                ],
+                "editorComment": "短评",
+            }),
+        ]
+
+        def llm(messages):
+            calls.append(messages)
+            return responses.pop(0)
+
+        Content(source, llm).build("2026-07-23", {})
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("editorComment", calls[1][1]["content"])
+        self.assertEqual(calls[1][0]["content"].count("### 条目 "), 2)
+
+    def test_content_uses_returned_ids_instead_of_position_to_match_sources(self):
+        source = lambda date: [
+            {"title": "Source 1", "summary": "S1", "source_url": "https://origin/1", "source": "A", "category": "news"},
+            {"title": "Source 2", "summary": "S2", "source_url": "https://origin/2", "source": "B", "category": "news"},
+        ]
+
+        def llm(messages):
+            return json.dumps({
+                "todayObservation": "观察",
+                "items": [
+                    {"id": 2, "title": "Edited 2", "rewritten": "Body 2"},
+                    {"id": 1, "title": "Edited 1", "rewritten": "Body 1"},
+                ],
+                "editorComment": "短评",
+            })
+
+        article = Content(source, llm).build("2026-07-23", {})
+
+        self.assertEqual([item["body"] for item in article["items"]], ["Body 1", "Body 2"])
+        self.assertEqual([item["source_url"] for item in article["items"]], ["https://origin/1", "https://origin/2"])
+
+    def test_content_reports_exact_missing_item_ids(self):
+        source = lambda date: [
+            {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "news"}
+            for index in range(1, 4)
+        ]
+
+        def llm(messages):
+            return json.dumps({
+                "todayObservation": "观察",
+                "items": [
+                    {"id": 1, "title": "1", "rewritten": "正文"},
+                    {"id": 3, "title": "3", "rewritten": "正文"},
+                ],
+                "editorComment": "短评",
+            })
+
+        with self.assertRaisesRegex(ContentError, "缺少编号 2"):
+            Content(source, llm).build("2026-07-23", {})
+
+    def test_content_rejects_duplicate_and_unknown_item_ids(self):
+        source = lambda date: [
+            {"title": str(index), "summary": "S", "source_url": f"https://origin/{index}", "source": "A", "category": "news"}
+            for index in range(1, 3)
+        ]
+
+        duplicate = json.dumps({
+            "todayObservation": "观察",
+            "items": [
+                {"id": 1, "title": "1", "rewritten": "正文"},
+                {"id": 2, "title": "2", "rewritten": "正文"},
+                {"id": 2, "title": "2b", "rewritten": "正文"},
+            ],
+            "editorComment": "短评",
+        })
+        unknown = json.dumps({
+            "todayObservation": "观察",
+            "items": [
+                {"id": 1, "title": "1", "rewritten": "正文"},
+                {"id": 2, "title": "2", "rewritten": "正文"},
+                {"id": 3, "title": "3", "rewritten": "正文"},
+            ],
+            "editorComment": "短评",
+        })
+
+        with self.assertRaisesRegex(ContentError, "重复编号 2"):
+            Content(source, lambda messages: duplicate).build("2026-07-23", {})
+        with self.assertRaisesRegex(ContentError, "未知编号 3"):
+            Content(source, lambda messages: unknown).build("2026-07-23", {})
+
+    def test_rewrite_prompt_requires_each_item_id_to_be_returned(self):
+        prompt_path = Path(__file__).parents[1] / "prompts" / "rewrite.md"
+        prompt = prompt_path.read_text(encoding="utf-8")
+
+        self.assertIn('"id": 1', prompt)
+        self.assertIn("原样返回每条输入资讯的编号", prompt)
+
+    def test_content_logs_safe_diagnostics_without_model_text(self):
+        source = lambda date: [
+            {"title": "T", "summary": "S", "source_url": "https://origin/1", "source": "A", "category": "news"}
+        ]
+        response = LlmResponse(
+            content="private-model-text",
+            finish_reason="length",
+            prompt_tokens=321,
+            completion_tokens=8000,
+        )
+
+        with self.assertLogs("ai_daily", level="WARNING") as captured:
+            with self.assertRaisesRegex(ContentError, "位置 0"):
+                Content(source, lambda messages: response).build("2026-07-23", {})
+
+        logs = "\n".join(captured.output)
+        self.assertIn("attempt=1", logs)
+        self.assertIn("attempt=2", logs)
+        self.assertIn("finish_reason=length", logs)
+        self.assertIn("response_chars=18", logs)
+        self.assertIn("prompt_tokens=321", logs)
+        self.assertIn("completion_tokens=8000", logs)
+        self.assertNotIn("private-model-text", logs)
+
+    def test_content_failure_names_a_length_limited_model_response(self):
+        source = lambda date: [
+            {"title": "T", "summary": "S", "source_url": "https://origin/1", "source": "A", "category": "news"}
+        ]
+        response = LlmResponse(content="not-json", finish_reason="length")
+
+        with self.assertRaisesRegex(ContentError, "模型输出达到长度上限"):
+            Content(source, lambda messages: response).build("2026-07-23", {})
+
+    def test_content_retries_a_non_text_model_response_and_reports_it(self):
+        source = lambda date: [
+            {"title": "T", "summary": "S", "source_url": "https://origin/1", "source": "A", "category": "news"}
+        ]
+        calls = []
+
+        def llm(messages):
+            calls.append(messages)
+            return LlmResponse(content=None, finish_reason="stop")
+
+        error = None
+        try:
+            Content(source, llm).build("2026-07-23", {})
+        except Exception as exc:
+            error = exc
+
+        self.assertIsInstance(error, ContentError)
+        self.assertIn("content 不是文本", str(error))
+        self.assertEqual(len(calls), 2)
 
     def test_content_stops_after_two_invalid_full_daily_responses(self):
         source = lambda date: [
@@ -197,7 +357,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(messages[0]["content"].count("### 条目 "), 11)
             return json.dumps({
                 "todayObservation": "覆盖全天的观察",
-                "items": [{"title": "R", "rewritten": "正文"} for _ in range(11)],
+                "items": [{"id": index + 1, "title": "R", "rewritten": "正文"} for index in range(11)],
                 "editorComment": "覆盖全天的短评",
             })
 
@@ -268,7 +428,7 @@ class WorkflowTests(unittest.TestCase):
             return json.dumps({
                 "todayObservation": "Opening",
                 "items": [
-                    {"title": f"Edited {index}", "rewritten": "Rewritten"}
+                    {"id": index + 1, "title": f"Edited {index}", "rewritten": "Rewritten"}
                     for index in range(count)
                 ],
                 "editorComment": "Closing",

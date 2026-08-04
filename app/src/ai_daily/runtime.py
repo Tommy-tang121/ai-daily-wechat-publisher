@@ -1,5 +1,6 @@
 import json
 import os
+from dataclasses import dataclass
 from datetime import date as calendar_date
 from pathlib import Path
 
@@ -85,8 +86,18 @@ class AihotSource:
         return items
 
 
+@dataclass(frozen=True)
+class LlmResponse:
+    """Model text plus safe, non-content diagnostics from the API envelope."""
+
+    content: str
+    finish_reason: str = ""
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
 class OpenAiCompatibleLlm:
-    def __call__(self, messages: list[dict]) -> str:
+    def __call__(self, messages: list[dict]) -> LlmResponse:
         import requests
         import time
 
@@ -112,7 +123,15 @@ class OpenAiCompatibleLlm:
                     timeout=(15, 120),
                 )
                 response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
+                envelope = response.json()
+                choice = envelope["choices"][0]
+                usage = envelope.get("usage", {})
+                return LlmResponse(
+                    content=choice["message"]["content"],
+                    finish_reason=choice.get("finish_reason", ""),
+                    prompt_tokens=usage.get("prompt_tokens"),
+                    completion_tokens=usage.get("completion_tokens"),
+                )
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt < 2:
